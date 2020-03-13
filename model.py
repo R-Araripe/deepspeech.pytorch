@@ -224,11 +224,23 @@ class DeepSpeech(nn.Module):
         package = torch.load(path, map_location=lambda storage, loc: storage)
         model = cls(rnn_hidden_size=package['hidden_size'],
                     nb_layers=package['hidden_layers'],
-                    labels=package['labels'],
+                    labels=[0, 1], # TO DO: automatize this
                     audio_conf=package['audio_conf'],
                     rnn_type=supported_rnns[package['rnn_type']],
                     bidirectional=package.get('bidirectional', True))
-        model.load_state_dict(package['state_dict'])
+
+        # Delete loaded weights from last FC layer
+        del package['state_dict']['fc.0.module.0.bias']
+        del package['state_dict']['fc.0.module.0.weight']  # what is the module if the fc.0 is probably the id of the layer?
+        del package['state_dict']['fc.0.module.1.weight']
+        del package['state_dict']['fc.0.module.0.num_batches_tracked'] # what is this?
+        del package['state_dict']['fc.0.module.0.running_mean'] # this FC has a batchnorm inside it??
+        del package['state_dict']['fc.0.module.0.running_var']
+
+        model_state_dict = model.state_dict()
+        model_state_dict.update(package['state_dict'])
+
+        model.load_state_dict(model_state_dict)
         for x in model.rnns:
             x.flatten_parameters()
         return model

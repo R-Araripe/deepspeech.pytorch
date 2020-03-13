@@ -1,0 +1,3 @@
+$ python test.py --model-path ../Data/Models/librispeech_pretrained_v2.pth --test-manifest data/libri_test_clean_manifest.csv --metadata ../Data/raw/PCGITA_metadata.xlsx
+
+python test.py --model-path ../Data/Models/librispeech_pretrained_v2.pth --test-manifest ../Data/downsampled-16k/manifest_vowels.txt --num_workers=1

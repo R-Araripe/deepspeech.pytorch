@@ -1,19 +1,19 @@
+import math
 import os
 import subprocess
 from tempfile import NamedTemporaryFile
-
-from torch.distributed import get_rank
-from torch.distributed import get_world_size
-from torch.utils.data.sampler import Sampler
 
 import librosa
 import numpy as np
 import scipy.signal
 import torch
 from scipy.io.wavfile import read
-import math
-from torch.utils.data import DataLoader
-from torch.utils.data import Dataset
+from torch.distributed import get_rank, get_world_size
+from torch.utils.data import DataLoader, Dataset
+from torch.utils.data.sampler import Sampler
+
+from utils import parse_dataset
+
 from .spec_augment import spec_augment
 
 windows = {'hamming': scipy.signal.hamming, 'hann': scipy.signal.hann, 'blackman': scipy.signal.blackman,
@@ -138,7 +138,7 @@ class SpectrogramParser(AudioParser):
 
 
 class SpectrogramDataset(Dataset, SpectrogramParser):
-    def __init__(self, audio_conf, manifest_filepath, labels, normalize=False, speed_volume_perturb=False, spec_augment=False):
+    def __init__(self, audio_conf, manifest_filepath, metadata_file_path, labels, normalize=False, speed_volume_perturb=False, spec_augment=False):
         """
         Dataset that loads tensors via a csv containing file paths to audio files and transcripts separated by
         a comma. Each new line is a different sample. Example below:
@@ -147,15 +147,15 @@ class SpectrogramDataset(Dataset, SpectrogramParser):
         ...
 
         :param audio_conf: Dictionary containing the sample rate, window and the window length/stride in seconds
-        :param manifest_filepath: Path to manifest csv as describe above
+        :param metadata_file_path: Path to manifest csv as describe above
         :param labels: String containing all the possible characters to map to
         :param normalize: Apply standard mean and deviation normalization to audio tensor
         :param speed_volume_perturb(default False): Apply random tempo and gain perturbations
         :param spec_augment(default False): Apply simple spectral augmentation to mel spectograms
         """
-        with open(manifest_filepath) as f:
-            ids = f.readlines()
-        ids = [x.strip().split(',') for x in ids]
+
+        ids = parse_dataset(metadata_file_path, manifest_filepath)
+
         self.ids = ids
         self.size = len(ids)
         self.labels_map = dict([(labels[i], i) for i in range(len(labels))])
@@ -163,16 +163,19 @@ class SpectrogramDataset(Dataset, SpectrogramParser):
 
     def __getitem__(self, index):
         sample = self.ids[index]
-        audio_path, transcript_path = sample[0], sample[1]
+        audio_path, class_name = sample[0], sample[1]
         spect = self.parse_audio(audio_path)
-        transcript = self.parse_transcript(transcript_path)
-        return spect, transcript
+        class_idx = self.parse_class(class_name)
+        return spect, class_idx
 
-    def parse_transcript(self, transcript_path):
-        with open(transcript_path, 'r', encoding='utf8') as transcript_file:
-            transcript = transcript_file.read().replace('\n', '')
-        transcript = list(filter(None, [self.labels_map.get(x) for x in list(transcript)]))
-        return transcript
+    # def parse_transcript(self, transcript_path):
+    #     with open(transcript_path, 'r', encoding='utf8') as transcript_file:
+    #         transcript = transcript_file.read().replace('\n', '')
+    #     transcript = list(filter(None, [self.labels_map.get(x) for x in list(transcript)]))
+    #     return transcript
+
+    def parse_class(self, class_name):
+        return self.labels_map.get(class_name)
 
     def __len__(self):
         return self.size
@@ -198,9 +201,13 @@ def _collate_fn(batch):
         seq_length = tensor.size(1)
         inputs[x][0].narrow(1, 0, seq_length).copy_(tensor)
         input_percentages[x] = seq_length / float(max_seqlength)
-        target_sizes[x] = len(target)
+        target_sizes[x] = 1  # antes tava len(target)
         targets.extend(target)
     targets = torch.IntTensor(targets)
+    print('inputs: ', inputs)
+    print('targets', targets)
+    print('input_percentages', input_percentages)
+    print('target_sizes', target_sizes)
     return inputs, targets, input_percentages, target_sizes
 
 

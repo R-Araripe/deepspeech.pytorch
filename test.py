@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from data.data_loader import SpectrogramDataset, AudioDataLoader
+from data.data_loader import AudioDataLoader, SpectrogramDataset
 from decoder import GreedyDecoder
 from opts import add_decoder_args, add_inference_args
 from utils import load_model
@@ -12,7 +12,9 @@ from utils import load_model
 parser = argparse.ArgumentParser(description='DeepSpeech transcription')
 parser = add_inference_args(parser)
 parser.add_argument('--test-manifest', metavar='DIR',
-                    help='path to validation manifest csv', default='data/test_manifest.csv')
+                    help='path to validation manifest csv', default='../Data/downsampled-16k/manifest_vowels.txt')
+# parser.add_argument('--metadata', metavar='DIR',
+#                     help='path to metadata csv', default='data/metadata.csv')
 parser.add_argument('--batch-size', default=20, type=int, help='Batch size for testing')
 parser.add_argument('--num-workers', default=4, type=int, help='Number of workers used in dataloading')
 parser.add_argument('--verbose', action="store_true", help="print out decoded output and error of each sample")
@@ -64,26 +66,33 @@ def evaluate(test_loader, device, model, decoder, target_decoder, save_output=Fa
 
 
 if __name__ == '__main__':
+
+
+    metadata_path  = '../Data/raw/PCGITA_metadata.xlsx'
+    model_path = '../Data/Models/librispeech_pretrained_v2.pth'
+
     args = parser.parse_args()
     torch.set_grad_enabled(False)
     device = torch.device("cuda" if args.cuda else "cpu")
-    model = load_model(device, args.model_path, args.half)
+    model = load_model(device, model_path, args.half)
 
-    if args.decoder == "beam":
-        from decoder import BeamCTCDecoder
+    # if args.decoder == "beam":
+    #     from decoder import BeamCTCDecoder
 
-        decoder = BeamCTCDecoder(model.labels, lm_path=args.lm_path, alpha=args.alpha, beta=args.beta,
-                                 cutoff_top_n=args.cutoff_top_n, cutoff_prob=args.cutoff_prob,
-                                 beam_width=args.beam_width, num_processes=args.lm_workers)
-    elif args.decoder == "greedy":
-        decoder = GreedyDecoder(model.labels, blank_index=model.labels.index('_'))
-    else:
-        decoder = None
-    target_decoder = GreedyDecoder(model.labels, blank_index=model.labels.index('_'))
-    test_dataset = SpectrogramDataset(audio_conf=model.audio_conf, manifest_filepath=args.test_manifest,
+    #     decoder = BeamCTCDecoder(model.labels, lm_path=args.lm_path, alpha=args.alpha, beta=args.beta,
+    #                              cutoff_top_n=args.cutoff_top_n, cutoff_prob=args.cutoff_prob,
+    #                              beam_width=args.beam_width, num_processes=args.lm_workers)
+    # elif args.decoder == "greedy":
+    #     decoder = GreedyDecoder(model.labels, blank_index=model.labels.index('_'))
+    # else:
+    decoder = None # TO DO: maybe use this to convert updrs classes into int classes
+    # target_decoder = GreedyDecoder(model.labels, blank_index=model.labels.index('_'))
+    target_decoder = None
+
+    test_dataset = SpectrogramDataset(audio_conf=model.audio_conf, manifest_filepath=args.test_manifest, metadata_file_path=metadata_path,
                                       labels=model.labels, normalize=True)
     test_loader = AudioDataLoader(test_dataset, batch_size=args.batch_size,
-                                  num_workers=args.num_workers)
+                                  num_workers=args.num_workers) # in train, the manifest will be already stratified with only train data so it's ok.
     wer, cer, output_data = evaluate(test_loader=test_loader,
                                      device=device,
                                      model=model,

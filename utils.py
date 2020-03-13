@@ -1,3 +1,4 @@
+import pandas as pd
 import torch
 import torch.distributed as dist
 
@@ -38,3 +39,51 @@ def load_model(device, model_path, use_half):
     if use_half:
         model = model.half()
     return model
+
+
+def get_subject_id_from_filepath(filepath):
+
+    '''
+        Obs: For now, specific for ParkinsonSpanishSpeech dataset.
+
+    '''
+
+    temp = filepath.split('AVPEPUDEA', 1)[1]
+    if temp[0] == 'C':
+        id_subj = 'AVPEPUDEAC' + temp[1:5]
+    else:
+        id_subj = 'AVPEPUDEA' + temp[0:4]
+    return id_subj
+
+
+def parse_dataset(metadata_filepath, recpath_filepath):
+    '''
+        Parameters
+        ----------
+        metadata_filepath: path to metadata csv file containing information about every subject.
+
+        recpath_filepath: path to txt or csv file where every line is the path to a single recording.
+
+        Returns
+        -------
+        List of tuples (recording path, category)
+    '''
+
+    metadata_df = pd.read_excel(metadata_filepath)
+    metadata_df.set_index(metadata_df.columns.tolist()[0], inplace=True)
+
+    with open(recpath_filepath) as f:
+        rec_path_list = f.readlines()
+
+    ids = []
+    for filepath in rec_path_list:
+
+        # Remove potential \n
+        filepath = filepath.split('\n')[0]
+
+        id_subj = get_subject_id_from_filepath(filepath)
+        label = 1 if int(metadata_df['H/Y'][id_subj]) > 0 else 0  # I think this will be codified later we do not have to worry now
+
+        ids.append((filepath, label))
+
+    return ids
