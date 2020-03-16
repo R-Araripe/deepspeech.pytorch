@@ -191,7 +191,42 @@ class GreedyDecoder(Decoder):
             strings: sequences of the model's best guess for the transcription on inputs
             offsets: time step per character predicted
         """
-        _, max_probs = torch.max(probs, 2)
+        _, max_probs = torch.max(probs, 2) # the second element is the argmax
         strings, offsets = self.convert_to_strings(max_probs.view(max_probs.size(0), max_probs.size(1)), sizes,
                                                    remove_repetitions=True, return_offsets=True)
         return strings, offsets
+
+
+class MyDecoder(object):
+
+    def __init__(self, labels):
+        self.labels = labels
+        self.int_to_label =  dict([(i, c) for (i, c) in enumerate(labels)])
+
+    def decode(self, probs):
+
+        _, max_probs = torch.max(probs, 2) # not sure about the 2
+        # print('minha probs: ', probs)
+        # print('minha max_probs: ', max_probs)
+        # print('max probs size: ', list(max_probs.size()))
+        # print('view: ', max_probs.view(max_probs.size(0), max_probs.size(1)))
+        # print('view size: ', list(max_probs.view(max_probs.size(0), max_probs.size(1)).size()))
+
+        labels_pred = self.convert_sequences_to_labels(max_probs.view(max_probs.size(0), max_probs.size(1)))
+        return labels_pred
+
+    def convert_sequences_to_labels(self, sequences):
+
+        out = []
+
+        for x in xrange(len(sequences)):
+            out.append(self.convert_to_labels(sequences[x]))
+
+        return out
+
+    def convert_to_labels(self, sequence):
+        out = []
+        for i in range(len(sequence)):
+            label = self.int_to_label[sequence[i].item()]
+            out.append(label)
+        return out

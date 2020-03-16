@@ -37,7 +37,7 @@ parser.add_argument('--epochs', default=70, type=int, help='Number of training e
 parser.add_argument('--cuda', dest='cuda', action='store_true', help='Use cuda to train model')
 parser.add_argument('--lr', '--learning-rate', default=3e-4, type=float, help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
-parser.add_argument('--max-norm', default=400, type=int, help='Norm cutoff to prevent explosion of gradients')
+parser.add_atarget_labels-norm', default=400, type=int, help='Ntarget_labelsprevent explosion of gradients')
 parser.add_argument('--learning-anneal', default=1.1, type=float, help='Annealing applied to learning rate every epoch')
 parser.add_argument('--silent', dest='silent', action='store_true', help='Turn off progress tracking per iteration')
 parser.add_argument('--checkpoint', dest='checkpoint', action='store_true', help='Enables checkpoint saving of model')

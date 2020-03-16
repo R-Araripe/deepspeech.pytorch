@@ -194,6 +194,7 @@ def _collate_fn(batch):
     input_percentages = torch.FloatTensor(minibatch_size)
     target_sizes = torch.IntTensor(minibatch_size)
     targets = []
+
     for x in range(minibatch_size):
         sample = batch[x]
         tensor = sample[0]
@@ -202,12 +203,12 @@ def _collate_fn(batch):
         inputs[x][0].narrow(1, 0, seq_length).copy_(tensor)
         input_percentages[x] = seq_length / float(max_seqlength)
         target_sizes[x] = 1  # antes tava len(target)
-        targets.extend(target)
+        targets.extend([target])
     targets = torch.IntTensor(targets)
-    print('inputs: ', inputs)
-    print('targets', targets)
-    print('input_percentages', input_percentages)
-    print('target_sizes', target_sizes)
+    # print('inputs: ', inputs)
+    # print('targets', targets)
+    # print('input_percentages', input_percentages)
+    # print('target_sizes', target_sizes)
     return inputs, targets, input_percentages, target_sizes
 
 
