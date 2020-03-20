@@ -1,8 +1,10 @@
 import argparse
+from pprint import pprint
 
 import numpy as np
+import pandas as pd
 import torch
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, confusion_matrix
 from tqdm import tqdm
 
 from data.data_loader import AudioDataLoader, SpectrogramDataset
@@ -27,6 +29,7 @@ def evaluate(test_loader, device, model, decoder, target_decoder, save_output=Fa
     model.eval()
     output_data = []
     accuracy_list = []
+    # import pdb; pdb.set_trace()
     for i, (data) in tqdm(enumerate(test_loader), total=len(test_loader)):
         inputs, targets, input_percentages, target_sizes = data
         input_sizes = input_percentages.mul_(int(inputs.size(3))).int()
@@ -44,11 +47,14 @@ def evaluate(test_loader, device, model, decoder, target_decoder, save_output=Fa
         # print('input sizes: '. list(inputs.size()))
 
         out, output_sizes = model(inputs, input_sizes)   # evaluation happens here I think
+        out = out.transpose(0, 1)  # TxNxH
         # print('out: ', out)
         # print('output_sizs: ', output_sizes)
         # print('split_targets: ', split_targets)
 
-        decoded_output = decoder.decode(out)
+        # import pdb; pdb.set_trace()
+
+        decoded_output = decoder.decode(out, output_sizes)
         target_labels = target_decoder.convert_to_labels(split_targets)
 
         if save_output is not None:
@@ -64,10 +70,16 @@ def evaluate(test_loader, device, model, decoder, target_decoder, save_output=Fa
         #     print('%i: '%(i), decoded_output[i])
         #     print('\n')
 
-        decoded_output_last = [sequence[-1] for sequence in decoded_output]
+        print('val pred labels: ', decoded_output)
+        print('val targ labels: ', target_labels)
 
-        accuracy = accuracy_score(target_labels, decoded_output_last) * 100.0
+        accuracy = accuracy_score(target_labels, decoded_output) * 100.0
         accuracy_list.append(accuracy)
+
+        cm = confusion_matrix(target_labels, decoded_output, labels=[0, 1])
+
+        print('confusion matrix:')
+        print(pd.DataFrame(cm))
 
     accuracy_list = np.array(accuracy_list)
     print('accuracy_list: ', accuracy_list)

@@ -3,42 +3,46 @@ import json
 import os
 import random
 import time
+from pprint import pprint
+from test import evaluate
 
 import numpy as np
+import pandas as pd
 import torch.distributed as dist
 import torch.utils.data.distributed
 from apex import amp
 from apex.parallel import DistributedDataParallel
+from sklearn.metrics import accuracy_score, confusion_matrix
 from warpctc_pytorch import CTCLoss
 
-from data.data_loader import AudioDataLoader, SpectrogramDataset, BucketingSampler, DistributedBucketingSampler
-from decoder import GreedyDecoder
-from logger import VisdomLogger, TensorBoardLogger
+from data.data_loader import (AudioDataLoader, BucketingSampler,
+                              DistributedBucketingSampler, SpectrogramDataset)
+from decoder import GreedyDecoder, MyDecoder
+from logger import TensorBoardLogger, VisdomLogger
 from model import DeepSpeech, supported_rnns
-from test import evaluate
-from utils import reduce_tensor, check_loss
+from utils import check_loss, reduce_tensor
 
 parser = argparse.ArgumentParser(description='DeepSpeech training')
 parser.add_argument('--train-manifest', metavar='DIR',
-                    help='path to train manifest csv', default='data/train_manifest.csv')
+                    help='path to train manifest csv', default='../Data/downsampled-16k/manifest_train_vowels-42.txt')
 parser.add_argument('--val-manifest', metavar='DIR',
-                    help='path to validation manifest csv', default='data/val_manifest.csv')
+                    help='path to validation manifest csv', default='../Data/downsampled-16k/manifest_val_vowels-42.txt')
 parser.add_argument('--sample-rate', default=16000, type=int, help='Sample rate')
-parser.add_argument('--batch-size', default=20, type=int, help='Batch size for training')
-parser.add_argument('--num-workers', default=4, type=int, help='Number of workers used in data-loading')
+parser.add_argument('--batch-size', default=32, type=int, help='Batch size for training')
+parser.add_argument('--num-workers', default=16, type=int, help='Number of workers used in data-loading')
 parser.add_argument('--labels-path', default='labels.json', help='Contains all characters for transcription')
 parser.add_argument('--window-size', default=.02, type=float, help='Window size for spectrogram in seconds')
 parser.add_argument('--window-stride', default=.01, type=float, help='Window stride for spectrogram in seconds')
 parser.add_argument('--window', default='hamming', help='Window type for spectrogram generation')
-parser.add_argument('--hidden-size', default=800, type=int, help='Hidden size of RNNs')
+parser.add_argument('--hidden-size', default=1024, type=int, help='Hidden size of RNNs')
 parser.add_argument('--hidden-layers', default=5, type=int, help='Number of RNN layers')
-parser.add_argument('--rnn-type', default='gru', help='Type of the RNN. rnn|gru|lstm are supported')
-parser.add_argument('--epochs', default=70, type=int, help='Number of training epochs')
+parser.add_argument('--rnn-type', default='lstm', help='Type of the RNN. rnn|gru|lstm are supported')
+parser.add_argument('--epochs', default=60, type=int, help='Number of training epochs')
 parser.add_argument('--cuda', dest='cuda', action='store_true', help='Use cuda to train model')
 parser.add_argument('--lr', '--learning-rate', default=3e-4, type=float, help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
-parser.add_atarget_labels-norm', default=400, type=int, help='Ntarget_labelsprevent explosion of gradients')
-parser.add_argument('--learning-anneal', default=1.1, type=float, help='Annealing applied to learning rate every epoch')
+parser.add_argument('--max-norm', default=400, type=int, help='Norm cutoff to prevent explosion of gradients')
+parser.add_argument('--learning-anneal', default=1.01, type=float, help='Annealing applied to learning rate every epoch')
 parser.add_argument('--silent', dest='silent', action='store_true', help='Turn off progress tracking per iteration')
 parser.add_argument('--checkpoint', dest='checkpoint', action='store_true', help='Enables checkpoint saving of model')
 parser.add_argument('--checkpoint-per-batch', default=0, type=int, help='Save checkpoint per batch. 0 means never save')
@@ -46,9 +50,9 @@ parser.add_argument('--visdom', dest='visdom', action='store_true', help='Turn o
 parser.add_argument('--tensorboard', dest='tensorboard', action='store_true', help='Turn on tensorboard graphing')
 parser.add_argument('--log-dir', default='visualize/deepspeech_final', help='Location of tensorboard log')
 parser.add_argument('--log-params', dest='log_params', action='store_true', help='Log parameter values and gradients')
-parser.add_argument('--id', default='Deepspeech training', help='Identifier for visdom/tensorboard run')
-parser.add_argument('--save-folder', default='models/', help='Location to save epoch models')
-parser.add_argument('--model-path', default='models/deepspeech_final.pth',
+parser.add_argument('--id', default='libri', help='Identifier for visdom/tensorboard run')
+parser.add_argument('--save-folder', default='../Data/Models/deepspeech.pytorch/parkinson-vowels/', help='Location to save epoch models')
+parser.add_argument('--model-path', default='../Data/Models/deepspeech.pytorch/parkinson-vowels/deepspeech_final.pth',
                     help='Location to save best validation model')
 parser.add_argument('--continue-from', default='', help='Continue from checkpoint model')
 parser.add_argument('--finetune', dest='finetune', action='store_true',
@@ -78,7 +82,7 @@ parser.add_argument('--rank', default=0, type=int,
 parser.add_argument('--gpu-rank', default=None,
                     help='If using distributed parallel for multi-gpu, sets the GPU for the process')
 parser.add_argument('--seed', default=123456, type=int, help='Seed to generators')
-parser.add_argument('--opt-level', type=str)
+parser.add_argument('--opt-level', default='O1', type=str)
 parser.add_argument('--keep-batchnorm-fp32', type=str, default=None)
 parser.add_argument('--loss-scale', default=1,
                     help='Loss scaling used by Apex. Default is 1 due to warp-ctc not supporting scaling of gradients')
@@ -113,6 +117,15 @@ class AverageMeter(object):
 if __name__ == '__main__':
     args = parser.parse_args()
 
+    # Try to add keys to arg
+    args.cuda = True
+    args.visdom = False
+    args.checkpoint = True
+    args.finetune = True
+    args.no_sorta_grad = True
+    args.continue_from = '../Data/Models/librispeech_pretrained_v2.pth'
+    metadata_path  = '../Data/raw/PCGITA_metadata.xlsx'
+
     # Set seeds for determinism
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
@@ -132,7 +145,7 @@ if __name__ == '__main__':
     save_folder = args.save_folder
     os.makedirs(save_folder, exist_ok=True)  # Ensure save folder exists
 
-    loss_results, cer_results, wer_results = torch.Tensor(args.epochs), torch.Tensor(args.epochs), torch.Tensor(
+    loss_results, acc_results, std_results = torch.Tensor(args.epochs), torch.Tensor(args.epochs), torch.Tensor(
         args.epochs)
     best_wer = None
     if main_proc and args.visdom:
@@ -148,8 +161,9 @@ if __name__ == '__main__':
         labels = model.labels
         audio_conf = model.audio_conf
         if not args.finetune:  # Don't want to restart training
+            # Nao eh finetuning. Entao os parametros de otimizacao (repare que nao os pesos,que sao o state_dict e esses foram carregados) nao voltam ao estado inicial. O modelo eh retreinado mas com a inicializacao dos pesos de antes. TO DO: quando for usar pro meu, checar as coisas de batch normalization, a running average nao pode ser usada por exemplo, ver se ela ta no state ou no optim.
             optim_state = package['optim_dict']
-            amp_state = package['amp']
+            # amp_state = package['amp']  # what is it?
             start_epoch = int(package.get('epoch', 1)) - 1  # Index start at 0 for training
             start_iter = package.get('iteration', None)
             if start_iter is None:
@@ -158,16 +172,16 @@ if __name__ == '__main__':
             else:
                 start_iter += 1
             avg_loss = int(package.get('avg_loss', 0))
-            loss_results, cer_results, wer_results = package['loss_results'], package['cer_results'], \
-                                                     package['wer_results']
-            best_wer = wer_results[start_epoch]
+            # loss_results, acc_results, std_results = package['loss_results'], package['cer_results'], \
+            #                                          package['wer_results']
+            best_wer = std_results[start_epoch]
             if main_proc and args.visdom:  # Add previous scores to visdom graph
                 visdom_logger.load_previous_values(start_epoch, package)
             if main_proc and args.tensorboard:  # Previous scores to tensorboard logs
                 tensorboard_logger.load_previous_values(start_epoch, package)
     else:
-        with open(args.labels_path) as label_file:
-            labels = str(''.join(json.load(label_file)))
+
+        labels = [0, 1]
 
         audio_conf = dict(sample_rate=args.sample_rate,
                           window_size=args.window_size,
@@ -186,20 +200,22 @@ if __name__ == '__main__':
                            audio_conf=audio_conf,
                            bidirectional=args.bidirectional)
 
-    decoder = GreedyDecoder(labels)
-    train_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.train_manifest, labels=labels,
+    decoder = MyDecoder(labels)
+
+    # TO DO: If I'm ever going to split train-val-test(?) here, I'll have to do before this. Maybe generate a manifest for each? for k-fold cross-validation
+    train_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.train_manifest, metadata_file_path=metadata_path, labels=labels,
                                        normalize=True, speed_volume_perturb=args.speed_volume_perturb, spec_augment=args.spec_augment)
-    test_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.val_manifest, labels=labels,
+    test_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.val_manifest,  metadata_file_path=metadata_path, labels=labels,
                                       normalize=True, speed_volume_perturb=False, spec_augment=False)
     if not args.distributed:
-        train_sampler = BucketingSampler(train_dataset, batch_size=args.batch_size)
+        train_sampler = BucketingSampler(train_dataset, batch_size=args.batch_size, shuffle=True)
     else:
         train_sampler = DistributedBucketingSampler(train_dataset, batch_size=args.batch_size,
                                                     num_replicas=args.world_size, rank=args.rank)
     train_loader = AudioDataLoader(train_dataset,
                                    num_workers=args.num_workers, batch_sampler=train_sampler)
     test_loader = AudioDataLoader(test_dataset, batch_size=args.batch_size,
-                                  num_workers=args.num_workers)
+                                  num_workers=args.num_workers, shuffle=True)
 
     if (not args.no_shuffle and start_epoch != 0) or args.no_sorta_grad:
         print("Shuffling batches for the following epochs")
@@ -226,7 +242,7 @@ if __name__ == '__main__':
     print(model)
     print("Number of parameters: %d" % DeepSpeech.get_param_size(model))
 
-    criterion = CTCLoss()
+    criterion = torch.nn.CrossEntropyLoss()
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -239,17 +255,57 @@ if __name__ == '__main__':
             if i == len(train_sampler):
                 break
             inputs, targets, input_percentages, target_sizes = data
+            # print('inputs: ', inputs)
+            # print('targets: ', targets)
+            # print('input size 0: ', inputs.size(0))
+            # print('input_percentages: ', input_percentages)  # de onde isso vem??? ah, acho que eh o tamanho do audio
+            # print('target sizes: ', target_sizes)
             input_sizes = input_percentages.mul_(int(inputs.size(3))).int()
+            # print('input_sizes: ', input_sizes)
             # measure data loading time
             data_time.update(time.time() - end)
             inputs = inputs.to(device)
+            targets = targets.to(device)
 
             out, output_sizes = model(inputs, input_sizes)
+
             out = out.transpose(0, 1)  # TxNxH
 
-            float_out = out.float()  # ensure float32 for loss
-            loss = criterion(float_out, targets, output_sizes, target_sizes).to(device)
+            float_out = out.float()  # ensure float32 for loss. They don't seem to be normalized :)
+            # print('float out: ', float_out)
+            # print('output sizes ', output_sizes)
+
+            # POR QUE SEMPRE OS MESMOS VALORES PRA TODOS MUNDO?? EXCETO O PRIMEIRO EXEMPLO DO MINIBATCH. EU DEVERIA MSM PEGAAR O ULTIMO?
+            float_out_last = float_out[output_sizes.long() - 1, torch.arange(float_out.size(1)), :]
+            # float_out_last = float_out[-1, :, :]
+            # import pdb; pdb.set_trace()
+
+            loss = criterion(float_out_last, targets.long()).to(device)
             loss = loss / inputs.size(0)  # average the loss by minibatch
+
+            # Sanity check
+            probs = torch.nn.functional.softmax(float_out_last, dim=1)
+            _, pred_labels = torch.max(probs, 1)
+            y_true = targets.cpu()
+            y_pred = pred_labels.cpu()
+
+            accuracy = accuracy_score(y_true, y_pred) * 100.0
+            print('accuracy: ', accuracy)
+
+            cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+            print('confusion matrix:')
+            print( pd.DataFrame(cm))
+
+            # print('y_true: ', y_true)
+            # print('y_pred: ', y_pred)
+
+
+            # import pdb; pdb.set_trace()
+
+
+            # decoded_output_last =
+            # target_labels = target_decoder.convert_to_labels(split_targets)
+
 
             if args.distributed:
                 loss = loss.to(device)
@@ -289,7 +345,7 @@ if __name__ == '__main__':
                 print("Saving checkpoint model to %s" % file_path)
                 torch.save(DeepSpeech.serialize(model, optimizer=optimizer, amp=amp, epoch=epoch, iteration=i,
                                                 loss_results=loss_results,
-                                                wer_results=wer_results, cer_results=cer_results, avg_loss=avg_loss),
+                                                wer_results=std_results, cer_results=acc_results, avg_loss=avg_loss),
                            file_path)
             del loss, out, float_out
 
@@ -302,23 +358,23 @@ if __name__ == '__main__':
 
         start_iter = 0  # Reset start iteration for next epoch
         with torch.no_grad():
-            wer, cer, output_data = evaluate(test_loader=test_loader,
+            acc_mean, acc_std, output_data = evaluate(test_loader=test_loader,
                                              device=device,
                                              model=model,
                                              decoder=decoder,
                                              target_decoder=decoder)
         loss_results[epoch] = avg_loss
-        wer_results[epoch] = wer
-        cer_results[epoch] = cer
+        std_results[epoch] = acc_mean
+        acc_results[epoch] = acc_std
         print('Validation Summary Epoch: [{0}]\t'
-              'Average WER {wer:.3f}\t'
-              'Average CER {cer:.3f}\t'.format(
-            epoch + 1, wer=wer, cer=cer))
+              'Average accuracy {acc:.3f}\t'
+              'Std accuracy {std:.3f}\t'.format(
+            epoch + 1, acc=acc_mean, std=acc_std))
 
         values = {
             'loss_results': loss_results,
-            'cer_results': cer_results,
-            'wer_results': wer_results
+            'acc_results': acc_results,
+            'std_results': std_results
         }
         if args.visdom and main_proc:
             visdom_logger.update(epoch, values)
@@ -326,26 +382,26 @@ if __name__ == '__main__':
             tensorboard_logger.update(epoch, values, model.named_parameters())
             values = {
                 'Avg Train Loss': avg_loss,
-                'Avg WER': wer,
-                'Avg CER': cer
+                'Avg accuracy': acc_mean,
+                'Std accuracy': acc_std
             }
 
         if main_proc and args.checkpoint:
             file_path = '%s/deepspeech_%d.pth.tar' % (save_folder, epoch + 1)
             torch.save(DeepSpeech.serialize(model, optimizer=optimizer, amp=amp, epoch=epoch, loss_results=loss_results,
-                                            wer_results=wer_results, cer_results=cer_results),
+                                            std_results=std_results, acc_results=acc_results),
                        file_path)
         # anneal lr
         for g in optimizer.param_groups:
             g['lr'] = g['lr'] / args.learning_anneal
         print('Learning rate annealed to: {lr:.6f}'.format(lr=g['lr']))
 
-        if main_proc and (best_wer is None or best_wer > wer):
+        if main_proc and (best_wer is None or best_wer > acc_mean):
             print("Found better validated model, saving to %s" % args.model_path)
             torch.save(DeepSpeech.serialize(model, optimizer=optimizer, amp=amp, epoch=epoch, loss_results=loss_results,
-                                            wer_results=wer_results, cer_results=cer_results)
+                                            wer_results=std_results, cer_results=acc_results)
                        , args.model_path)
-            best_wer = wer
+            best_wer = acc_mean
             avg_loss = 0
 
         if not args.no_shuffle:

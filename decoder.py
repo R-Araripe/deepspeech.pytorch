@@ -203,16 +203,19 @@ class MyDecoder(object):
         self.labels = labels
         self.int_to_label =  dict([(i, c) for (i, c) in enumerate(labels)])
 
-    def decode(self, probs):
+    def decode(self, probs, output_sizes):
 
-        _, max_probs = torch.max(probs, 2) # not sure about the 2
+        probs_last = probs[output_sizes.long() - 1, torch.arange(probs.size(1)), :]  # still don't know if I should do this
+
+        _, max_probs = torch.max(probs_last, 1)
+
         # print('minha probs: ', probs)
         # print('minha max_probs: ', max_probs)
         # print('max probs size: ', list(max_probs.size()))
         # print('view: ', max_probs.view(max_probs.size(0), max_probs.size(1)))
         # print('view size: ', list(max_probs.view(max_probs.size(0), max_probs.size(1)).size()))
 
-        labels_pred = self.convert_sequences_to_labels(max_probs.view(max_probs.size(0), max_probs.size(1)))
+        labels_pred = self.convert_to_labels(max_probs)
         return labels_pred
 
     def convert_sequences_to_labels(self, sequences):

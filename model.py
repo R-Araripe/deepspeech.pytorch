@@ -188,22 +188,46 @@ class DeepSpeech(nn.Module):
     def forward(self, x, lengths):
         lengths = lengths.cpu().int()
         output_lengths = self.get_seq_lens(lengths)
+
+        # print('output lenghts in forward: ', output_lengths)
+        # print('len do output lenghts: ', len(output_lengths))
+
+        # print('size x received  ', x.size())
+
         x, _ = self.conv(x, output_lengths)
+
+        # print('size x after conv  ', x.size())
+
 
         sizes = x.size()
         x = x.view(sizes[0], sizes[1] * sizes[2], sizes[3])  # Collapse feature dimension
         x = x.transpose(1, 2).transpose(0, 1).contiguous()  # TxNxH
 
+        # print('size x after collapes TxNxH  ', x.size())
+
         for rnn in self.rnns:
             x = rnn(x, output_lengths)
+
+        # print('size x after rnns  ', x.size())
 
         if not self.bidirectional:  # no need for lookahead layer in bidirectional
             x = self.lookahead(x)
 
+        # print('size x after lookahead  ', x.size())
+
         x = self.fc(x)
+
+        # print('size x after fc  ', x.size())
+
         x = x.transpose(0, 1)
+
+        # print('size x after transpose  ', x.size())
+
         # identity in training mode, softmax in eval mode
         x = self.inference_softmax(x)
+
+        # print('size x after softmax  ', x.size())
+
         return x, output_lengths
 
     def get_seq_lens(self, input_length):
@@ -249,16 +273,39 @@ class DeepSpeech(nn.Module):
     def load_model_package(cls, package):
         model = cls(rnn_hidden_size=package['hidden_size'],
                     nb_layers=package['hidden_layers'],
-                    labels=package['labels'],
+                    labels=[0, 1], # TO DO: automatize this
                     audio_conf=package['audio_conf'],
                     rnn_type=supported_rnns[package['rnn_type']],
                     bidirectional=package.get('bidirectional', True))
-        model.load_state_dict(package['state_dict'])
+
+        # Delete loaded weights from last FC layer
+        del package['state_dict']['fc.0.module.0.bias']
+        del package['state_dict']['fc.0.module.0.weight']  # what is the module if the fc.0 is probably the id of the layer?
+        del package['state_dict']['fc.0.module.1.weight']
+        del package['state_dict']['fc.0.module.0.num_batches_tracked'] # what is this?
+        del package['state_dict']['fc.0.module.0.running_mean'] # this FC has a batchnorm inside it??
+        del package['state_dict']['fc.0.module.0.running_var']
+
+        keys_to_delete = []
+        for k in package['state_dict'].keys():
+            if 'batch_norm' in k or 'running' in k or 'num_batches_tracked' in k:
+                keys_to_delete.append(k)
+
+        for k in keys_to_delete:
+            del package['state_dict'][k]
+
+        # Delete batch norm for all
+
+        model_state_dict = model.state_dict()
+        model_state_dict.update(package['state_dict'])
+
+        model.load_state_dict(model_state_dict)
+
         return model
 
     @staticmethod
     def serialize(model, optimizer=None, amp=None, epoch=None, iteration=None, loss_results=None,
-                  cer_results=None, wer_results=None, avg_loss=None, meta=None):
+                  cer_results=None, wer_results=None, acc_results=None, std_results=None, avg_loss=None, meta=None):
         package = {
             'version': model.version,
             'hidden_size': model.hidden_size,
@@ -281,8 +328,8 @@ class DeepSpeech(nn.Module):
             package['iteration'] = iteration
         if loss_results is not None:
             package['loss_results'] = loss_results
-            package['cer_results'] = cer_results
-            package['wer_results'] = wer_results
+            package['acc_results'] = acc_results
+            package['std_results'] = std_results
         if meta is not None:
             package['meta'] = meta
         return package
