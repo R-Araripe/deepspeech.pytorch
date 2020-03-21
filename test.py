@@ -83,7 +83,8 @@ def evaluate(test_loader, device, model, decoder, target_decoder, save_output=Fa
 
     accuracy_list = np.array(accuracy_list)
     print('accuracy_list: ', accuracy_list)
-    accuracy_mean = accuracy_list.mean()
+    accuracy_mean = accuracy_list.mean()  # nao eh assim que faz, eh pra somar todos os certos e fazer uma razao no final https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
+
     accuracy_std = accuracy_list.std()
 
     return accuracy_mean, accuracy_std, output_data

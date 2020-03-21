@@ -43,14 +43,16 @@ class TensorBoardLogger(object):
         self.log_params = log_params
 
     def update(self, epoch, values, parameters=None):
-        loss, wer, cer = values["loss_results"][epoch + 1], values["wer_results"][epoch + 1], \
-                         values["cer_results"][epoch + 1]
+        # import pdb; pdb.set_trace()
+        loss, acc, std = values["loss_results"][epoch], values["acc_results"][epoch], \
+                         values["std_results"][epoch]
         values = {
-            'Avg Train Loss': loss,
-            'Avg WER': wer,
-            'Avg CER': cer
+            'Avg Train Loss': loss.item(),
+            'Avg accuracy': acc.item(),
+            'Std accuracy': std.item()
         }
-        self.tensorboard_writer.add_scalars(self.id, values, epoch + 1)
+        # import pdb; pdb.set_trace()
+        self.tensorboard_writer.add_scalars(self.id, values, epoch)
         if self.log_params:
             for tag, value in parameters():
                 tag = tag.replace('.', '/')
@@ -58,6 +60,7 @@ class TensorBoardLogger(object):
                 self.tensorboard_writer.add_histogram(tag + '/grad', to_np(value.grad), epoch + 1)
 
     def load_previous_values(self, start_epoch, values):
+        # import pdb; pdb.set_trace()
         loss_results = values["loss_results"][:start_epoch]
         wer_results = values["wer_results"][:start_epoch]
         cer_results = values["cer_results"][:start_epoch]
@@ -69,3 +72,6 @@ class TensorBoardLogger(object):
                 'Avg CER': cer_results[i]
             }
             self.tensorboard_writer.add_scalars(self.id, values, i + 1)
+
+    def close(self):
+        self.tensorboard_writer.close()
