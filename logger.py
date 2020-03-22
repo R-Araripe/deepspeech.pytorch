@@ -1,6 +1,7 @@
 import os
 
 import torch
+import torchvision
 
 
 def to_np(x):
@@ -37,9 +38,11 @@ class VisdomLogger(object):
 class TensorBoardLogger(object):
     def __init__(self, id, log_dir, log_params):
         os.makedirs(log_dir, exist_ok=True)
-        from tensorboardX import SummaryWriter
+        # from tensorboardX import SummaryWriter
+        from torch.utils.tensorboard import SummaryWriter
+
         self.id = id
-        self.tensorboard_writer = SummaryWriter(log_dir)
+        self.tensorboard_writer = SummaryWriter(log_dir, flush_secs=20)
         self.log_params = log_params
 
     def update(self, epoch, values, parameters=None):
@@ -47,9 +50,9 @@ class TensorBoardLogger(object):
         loss, acc, std = values["loss_results"][epoch], values["acc_results"][epoch], \
                          values["std_results"][epoch]
         values = {
-            'Avg Train Loss': loss.item(),
-            'Avg accuracy': acc.item(),
-            'Std accuracy': std.item()
+            'Avg Train Loss': loss,
+            'Avg accuracy': acc,
+            'Std accuracy': std
         }
         # import pdb; pdb.set_trace()
         self.tensorboard_writer.add_scalars(self.id, values, epoch)
@@ -59,7 +62,7 @@ class TensorBoardLogger(object):
                 self.tensorboard_writer.add_histogram(tag, to_np(value), epoch + 1)
                 self.tensorboard_writer.add_histogram(tag + '/grad', to_np(value.grad), epoch + 1)
 
-    def load_previous_values(self, start_epoch, values):
+    def load_previous_values_libri(self, start_epoch, values):
         # import pdb; pdb.set_trace()
         loss_results = values["loss_results"][:start_epoch]
         wer_results = values["wer_results"][:start_epoch]
@@ -67,11 +70,18 @@ class TensorBoardLogger(object):
 
         for i in range(start_epoch):
             values = {
-                'Avg Train Loss': loss_results[i],
-                'Avg WER': wer_results[i],
-                'Avg CER': cer_results[i]
+                'Avg Train Loss pre-trained': loss_results[i],
+                'Avg WER pre-trained': wer_results[i],
+                'Avg CER pre-trained': cer_results[i]
             }
             self.tensorboard_writer.add_scalars(self.id, values, i + 1)
 
     def close(self):
         self.tensorboard_writer.close()
+
+    def add_image(self, images, sizes, labels, network=None):
+        grid = torchvision.utils.make_grid(images)
+        # self.tensorboard_writer.add_image('train_random_batch_images', grid)
+        # import pdb; pdb.set_trace()
+        if network:
+            self.tensorboard_writer.add_graph(network, (images, sizes), verbose=True)

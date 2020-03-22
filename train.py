@@ -180,7 +180,7 @@ if __name__ == '__main__':
             if main_proc and args.visdom:  # Add previous scores to visdom graph
                 visdom_logger.load_previous_values(start_epoch, package)
             if main_proc and args.tensorboard:  # Previous scores to tensorboard logs
-                tensorboard_logger.load_previous_values(start_epoch, package)
+                tensorboard_logger.load_previous_values_libri(start_epoch, package)
     else:
 
         labels = [0, 1]
@@ -219,9 +219,19 @@ if __name__ == '__main__':
     test_loader = AudioDataLoader(test_dataset, batch_size=args.batch_size,
                                   num_workers=args.num_workers, shuffle=True)
 
+
     if (not args.no_shuffle and start_epoch != 0) or args.no_sorta_grad:
         print("Shuffling batches for the following epochs")
         train_sampler.shuffle(start_epoch)
+
+    if args.tensorboard:  # TO DO get some audios also
+        inputs, targets, input_percentages, target_sizes = next(iter(train_loader))
+        input_sizes = input_percentages.mul_(int(inputs.size(3))).int()
+        # import pdb; pdb.set_trace()
+        # x = torch.stack([inputs, input_sizes.cuda().float()])
+
+        tensorboard_logger.add_image(inputs, input_sizes, targets, network=model) # add graph doesn't work if model is in gpu
+        # import pdb; pdb.set_trace()
 
     model = model.to(device)
     parameters = model.parameters()
@@ -248,6 +258,9 @@ if __name__ == '__main__':
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
+
+
+
 
     for epoch in range(start_epoch, args.epochs):
         model.train()

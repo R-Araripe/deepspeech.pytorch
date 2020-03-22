@@ -22,7 +22,7 @@ windows = {'hamming': scipy.signal.hamming, 'hann': scipy.signal.hann, 'blackman
 
 def load_audio(path):
     sample_rate, sound = read(path)
-    sound = sound.astype('float32') / 32767  # normalize audio
+    sound = sound.astype('float32') / 32767  # normalize audio QUE PQ ESSE NUMERO?
     if len(sound.shape) > 1:
         if sound.shape[1] == 1:
             sound = sound.squeeze()
@@ -184,6 +184,8 @@ class SpectrogramDataset(Dataset, SpectrogramParser):
 def _collate_fn(batch):
     def func(p):
         return p[0].size(1)
+
+    # batch is a list of guys like (tensor(num els in frame, num frames), corresponding label)
 
     batch = sorted(batch, key=lambda sample: sample[0].size(1), reverse=True)
     longest_sample = max(batch, key=func)[0]

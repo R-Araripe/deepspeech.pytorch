@@ -1,10 +1,10 @@
 import math
 from collections import OrderedDict
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.parameter import Parameter
 
 supported_rnns = {
     'lstm': nn.LSTM,
@@ -185,9 +185,23 @@ class DeepSpeech(nn.Module):
         )
         self.inference_softmax = InferenceBatchSoftmax()
 
+        self.fake_length = None
+
     def forward(self, x, lengths):
+
+        # if args:
+        #     lengths = args[0]
+        # else:
+        #     lengths = x[1]
+        #     x = x[0]
+
+        # import pdb; pdb.set_trace()
+
         lengths = lengths.cpu().int()
         output_lengths = self.get_seq_lens(lengths)
+
+
+        # import pdb; pdb.set_trace()
 
         # print('output lenghts in forward: ', output_lengths)
         # print('len do output lenghts: ', len(output_lengths))
