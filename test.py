@@ -25,10 +25,16 @@ parser.add_argument('--save-output', default=None, help="Saves output of model f
 parser = add_decoder_args(parser)
 
 
+def get_number_of_correct(y_true, y_pred):
+    return np.sum([true==pred for true, pred in zip(y_true, y_pred)])
+
+
 def evaluate(test_loader, device, model, decoder, target_decoder, save_output=False, verbose=False, half=False):
     model.eval()
     output_data = []
-    accuracy_list = []
+    y_true = np.array([])
+    y_pred = np.array([])
+    total_correct = 0
     # import pdb; pdb.set_trace()
     for i, (data) in tqdm(enumerate(test_loader), total=len(test_loader)):
         inputs, targets, input_percentages, target_sizes = data
@@ -57,9 +63,13 @@ def evaluate(test_loader, device, model, decoder, target_decoder, save_output=Fa
         decoded_output = decoder.decode(out, output_sizes)
         target_labels = target_decoder.convert_to_labels(split_targets)
 
+        y_true = np.concatenate((y_true, target_labels))
+        y_pred = np.concatenate((y_pred, decoded_output))
+
         if save_output is not None:
             # add output to data array, and continue
             output_data.append((out.cpu().numpy(), output_sizes.numpy(), target_labels))
+
 
         # print('target_strings: ', target_labels)
         # print('len de target_strings: ', len(target_labels))
@@ -73,21 +83,21 @@ def evaluate(test_loader, device, model, decoder, target_decoder, save_output=Fa
         print('val pred labels: ', decoded_output)
         print('val targ labels: ', target_labels)
 
-        accuracy = accuracy_score(target_labels, decoded_output) * 100.0
-        accuracy_list.append(accuracy)
+        total_correct += get_number_of_correct(y_true, y_pred)
 
-        cm = confusion_matrix(target_labels, decoded_output, labels=[0, 1])
+    accuracy = accuracy_score(y_true, y_pred) * 100.0
+    cm = confusion_matrix(target_labels, decoded_output, labels=[0, 1])
 
-        print('confusion matrix:')
-        print(pd.DataFrame(cm))
+    print('confusion matrix:')
+    print(pd.DataFrame(cm))
 
-    accuracy_list = np.array(accuracy_list)
-    print('accuracy_list: ', accuracy_list)
-    accuracy_mean = accuracy_list.mean()  # nao eh assim que faz, eh pra somar todos os certos e fazer uma razao no final https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
+    # accuracy_list = np.array(accuracy_list)
+    # print('accuracy_list: ', accuracy_list)
+    # accuracy_mean = accuracy_list.mean()  # nao eh assim que faz, eh pra somar todos os certos e fazer uma razao no final https://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html
 
-    accuracy_std = accuracy_list.std()
+    # accuracy_std = accuracy_list.std()
 
-    return accuracy_mean, accuracy_std, output_data
+    return accuracy, output_data
 
 if __name__ == '__main__':
 

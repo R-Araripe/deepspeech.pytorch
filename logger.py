@@ -36,31 +36,43 @@ class VisdomLogger(object):
 
 
 class TensorBoardLogger(object):
-    def __init__(self, id, log_dir, log_params):
-        os.makedirs(log_dir, exist_ok=True)
+    def __init__(self, id, log_dir, log_params, parameters=None, comment=''):
+        # import pdb; pdb.set_trace()
+
+        log_dir_name = os.path.join(log_dir, id, comment)
+        os.makedirs(log_dir_name, exist_ok=True)
+
         # from tensorboardX import SummaryWriter
         from torch.utils.tensorboard import SummaryWriter
 
         self.id = id
-        self.tensorboard_writer = SummaryWriter(log_dir, flush_secs=20)
+        # TO DO get parameters and transform to string to identify run
+        self.tensorboard_writer = SummaryWriter(log_dir_name, flush_secs=20) #
         self.log_params = log_params
 
-    def update(self, epoch, values, parameters=None):
-        # import pdb; pdb.set_trace()
-        loss, acc, std = values["loss_results"][epoch], values["acc_results"][epoch], \
-                         values["std_results"][epoch]
-        values = {
-            'Avg Train Loss': loss,
-            'Avg accuracy': acc,
-            'Std accuracy': std
-        }
-        # import pdb; pdb.set_trace()
-        self.tensorboard_writer.add_scalars(self.id, values, epoch)
-        if self.log_params:
+    def update(self, iter, values, parameters=None, debug=False, together=False, name=''):
+        '''
+            Parameters
+            ----------
+
+            values: dicionary where key is metric name and value..the value
+
+        '''
+        if debug:
+            import pdb; pdb.set_trace()
+
+        if together:
+            self.tensorboard_writer.add_scalars(name, values, iter)
+        for k, v in values.items():
+            self.tensorboard_writer.add_scalar(k, v, iter)
+
+        if self.log_params and parameters is not None:
             for tag, value in parameters():
                 tag = tag.replace('.', '/')
-                self.tensorboard_writer.add_histogram(tag, to_np(value), epoch + 1)
-                self.tensorboard_writer.add_histogram(tag + '/grad', to_np(value.grad), epoch + 1)
+                # import pdb; pdb.set_trace()
+                self.tensorboard_writer.add_histogram(tag, value, iter)
+                self.tensorboard_writer.add_histogram(tag + '/grad', value.grad, iter)
+
 
     def load_previous_values_libri(self, start_epoch, values):
         # import pdb; pdb.set_trace()
@@ -84,4 +96,4 @@ class TensorBoardLogger(object):
         # self.tensorboard_writer.add_image('train_random_batch_images', grid)
         # import pdb; pdb.set_trace()
         if network:
-            self.tensorboard_writer.add_graph(network, (images, sizes), verbose=True)
+            self.tensorboard_writer.add_graph(network, (images, sizes), verbose=False)

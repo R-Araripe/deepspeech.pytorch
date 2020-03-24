@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+from datetime import datetime
 from pprint import pprint
 from test import evaluate
 
@@ -37,7 +38,7 @@ parser.add_argument('--window', default='hamming', help='Window type for spectro
 parser.add_argument('--hidden-size', default=1024, type=int, help='Hidden size of RNNs')
 parser.add_argument('--hidden-layers', default=5, type=int, help='Number of RNN layers')
 parser.add_argument('--rnn-type', default='lstm', help='Type of the RNN. rnn|gru|lstm are supported')
-parser.add_argument('--epochs', default=2, type=int, help='Number of training epochs')
+parser.add_argument('--epochs', default=30, type=int, help='Number of training epochs')
 parser.add_argument('--cuda', dest='cuda', action='store_true', help='Use cuda to train model')
 parser.add_argument('--lr', '--learning-rate', default=3e-4, type=float, help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
@@ -117,6 +118,8 @@ class AverageMeter(object):
 if __name__ == '__main__':
     args = parser.parse_args()
 
+    print('AAAAAAAHHHHH IT STARTED')
+
     # Try to add keys to arg
     args.cuda = True
     args.visdom = False
@@ -125,8 +128,24 @@ if __name__ == '__main__':
     args.no_sorta_grad = True
     args.continue_from = '../Data/Models/librispeech_pretrained_v2.pth'
     metadata_path  = '../Data/raw/PCGITA_metadata.xlsx'
+    args.cuda = True
+    which_cuda = 'cuda:0'
+
     args.tensorboard = True
-    args.log_params = False  # for now while I fix the other stuff
+    args.log_params = True  # for now while I fix the other stuff
+    generate_graph = False
+    args.batch_size = 10
+    reg = 1e-3
+
+    data_category = 'monologues'
+    data_subcategory = '' # AEIOU
+
+    args.train_manifest = '../Data/downsampled-16k/manifest_train_%s-42-%s.txt'%((data_category, data_subcategory))
+    args.val_manifest = '../Data/downsampled-16k/manifest_val_%s-42-%s.txt'%((data_category, data_subcategory))
+
+    # Create sufix for logging
+    sufix = '%s_data=%s_batchsize=%i_reg=%.2E'%((str(datetime.now()), data_category + data_subcategory, args.batch_size, reg))
+
 
     # Set seeds for determinism
     torch.manual_seed(args.seed)
@@ -134,10 +153,10 @@ if __name__ == '__main__':
     np.random.seed(args.seed)
     random.seed(args.seed)
 
-    device = torch.device("cuda" if args.cuda else "cpu")
+    device = torch.device(which_cuda if args.cuda else "cpu")
     args.distributed = args.world_size > 1
     main_proc = True
-    device = torch.device("cuda" if args.cuda else "cpu")
+    device = torch.device(which_cuda if args.cuda else "cpu")
     if args.distributed:
         if args.gpu_rank:
             torch.cuda.set_device(int(args.gpu_rank))
@@ -147,13 +166,14 @@ if __name__ == '__main__':
     save_folder = args.save_folder
     os.makedirs(save_folder, exist_ok=True)  # Ensure save folder exists
 
-    loss_results, acc_results, std_results = torch.Tensor(args.epochs), torch.Tensor(args.epochs), torch.Tensor(
-        args.epochs)
-    best_wer = None
+    # loss_results, acc_results, std_results = torch.Tensor(args.epochs), torch.Tensor(args.epochs), torch.Tensor(
+    #     args.epochs)
+    # best_wer = None
     if main_proc and args.visdom:
         visdom_logger = VisdomLogger(args.id, args.epochs)
     if main_proc and args.tensorboard:
-        tensorboard_logger = TensorBoardLogger(args.id, args.log_dir, args.log_params)
+        # import pdb; pdb.set_trace()
+        tensorboard_logger = TensorBoardLogger(args.id, args.log_dir, args.log_params, comment=sufix)
 
     avg_loss, start_epoch, start_iter, optim_state, amp_state = 0, 0, 0, None, None
     if args.continue_from:  # Starting from previous model
@@ -176,7 +196,7 @@ if __name__ == '__main__':
             avg_loss = int(package.get('avg_loss', 0))
             # loss_results, acc_results, std_results = package['loss_results'], package['cer_results'], \
             #                                          package['wer_results']
-            best_wer = std_results[start_epoch]
+            # best_wer = std_results[start_epoch]
             if main_proc and args.visdom:  # Add previous scores to visdom graph
                 visdom_logger.load_previous_values(start_epoch, package)
             if main_proc and args.tensorboard:  # Previous scores to tensorboard logs
@@ -207,8 +227,13 @@ if __name__ == '__main__':
     # TO DO: If I'm ever going to split train-val-test(?) here, I'll have to do before this. Maybe generate a manifest for each? for k-fold cross-validation
     train_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.train_manifest, metadata_file_path=metadata_path, labels=labels,
                                        normalize=True, speed_volume_perturb=args.speed_volume_perturb, spec_augment=args.spec_augment)
+
     test_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.val_manifest,  metadata_file_path=metadata_path, labels=labels,
                                       normalize=True, speed_volume_perturb=False, spec_augment=False)
+
+    print('\n Num samples train dataset: ', len(train_dataset))
+    print('\n Num samples val   dataset: ', len(test_dataset))
+
     if not args.distributed:
         train_sampler = BucketingSampler(train_dataset, batch_size=args.batch_size, shuffle=True)
     else:
@@ -224,19 +249,16 @@ if __name__ == '__main__':
         print("Shuffling batches for the following epochs")
         train_sampler.shuffle(start_epoch)
 
-    if args.tensorboard:  # TO DO get some audios also
-        inputs, targets, input_percentages, target_sizes = next(iter(train_loader))
-        input_sizes = input_percentages.mul_(int(inputs.size(3))).int()
-        # import pdb; pdb.set_trace()
-        # x = torch.stack([inputs, input_sizes.cuda().float()])
-
-        tensorboard_logger.add_image(inputs, input_sizes, targets, network=model) # add graph doesn't work if model is in gpu
-        # import pdb; pdb.set_trace()
+    if args.tensorboard and generate_graph:  # TO DO get some audios also
+        with torch.no_grad(): # sla vai que ne
+            inputs, targets, input_percentages, target_sizes = next(iter(train_loader))
+            input_sizes = input_percentages.mul_(int(inputs.size(3))).int()
+            tensorboard_logger.add_image(inputs, input_sizes, targets, network=model) # add graph doesn't work if model is in gpu
 
     model = model.to(device)
     parameters = model.parameters()
     optimizer = torch.optim.SGD(parameters, lr=args.lr,
-                                momentum=args.momentum, nesterov=True, weight_decay=1e-5)
+                                momentum=args.momentum, nesterov=True, weight_decay=reg)
 
     model, optimizer = amp.initialize(model, optimizer,
                                       opt_level=args.opt_level,
@@ -259,15 +281,23 @@ if __name__ == '__main__':
     data_time = AverageMeter()
     losses = AverageMeter()
 
+    loss_epochs = []  # list of list epochs->iterations in epoch
+    avg_loss_epochs = [] # list
+    accuracy_train_in_epochs = [] # list of list
+    accuracy_train_epochs = [] # list
+    accuracy_val_epochs = []  # list
 
-
-
+    start_epochs = time.time()
     for epoch in range(start_epoch, args.epochs):
         model.train()
         end = time.time()
         start_epoch_time = time.time()
+        losses_epoch = []
+        y_true_train_epoch = np.array([])
+        y_pred_train_epoch = np.array([])
+        accuracies_train_epoch = []
         for i, (data) in enumerate(train_loader, start=start_iter):
-            if i == len(train_sampler):
+            if i == len(train_sampler):  # QUE pq isso deus
                 break
             inputs, targets, input_percentages, target_sizes = data
             # print('inputs: ', inputs)
@@ -304,22 +334,16 @@ if __name__ == '__main__':
             y_true = targets.cpu()
             y_pred = pred_labels.cpu()
 
-            accuracy = accuracy_score(y_true, y_pred) * 100.0
-            print('accuracy: ', accuracy)
+            y_true_train_epoch = np.concatenate((y_true_train_epoch, y_true.numpy()))  # maybe I should do it with tensors?
+            y_pred_train_epoch = np.concatenate((y_pred_train_epoch, y_pred.numpy()))
+
+            accuracy_train = accuracy_score(y_true, y_pred) * 100.0
+            accuracies_train_epoch.append(accuracy_train)
+            print('accuracy train step: ', accuracy_train)
 
             cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
-            print('confusion matrix:')
+            print('confusion matrix train step:')
             print( pd.DataFrame(cm))
-
-            # print('y_true: ', y_true)
-            # print('y_pred: ', y_pred)
-
-
-            # import pdb; pdb.set_trace()
-
-
-            # decoded_output_last =
-            # target_labels = target_decoder.convert_to_labels(split_targets)
 
 
             if args.distributed:
@@ -328,12 +352,21 @@ if __name__ == '__main__':
             else:
                 loss_value = loss.item()
 
+            losses_epoch.append(loss_value)
+
+            # Log iteration results
+            if args.tensorboard:
+                tensorboard_logger.update(len(train_loader) * epoch + i, {
+                    'Loss/through_iterations': loss_value,
+                    'Accuracy/train_through_iterations': accuracy_train
+                })
+
             # Check to ensure valid loss was calculated
             valid_loss, error = check_loss(loss, loss_value)
             if valid_loss:
+
                 optimizer.zero_grad()
                 # compute gradient
-
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
                 torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_norm)
@@ -355,16 +388,22 @@ if __name__ == '__main__':
                       'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'.format(
                     (epoch + 1), (i + 1), len(train_sampler), batch_time=batch_time, data_time=data_time, loss=losses))
-            if args.checkpoint_per_batch > 0 and i > 0 and (i + 1) % args.checkpoint_per_batch == 0 and main_proc:
-                file_path = '%s/deepspeech_checkpoint_epoch_%d_iter_%d.pth' % (save_folder, epoch + 1, i + 1)
-                print("Saving checkpoint model to %s" % file_path)
-                torch.save(DeepSpeech.serialize(model, optimizer=optimizer, amp=amp, epoch=epoch, iteration=i,
-                                                loss_results=loss_results,
-                                                wer_results=std_results, cer_results=acc_results, avg_loss=avg_loss),
-                           file_path)
+
             del loss, out, float_out
 
+        end_epochs = time.time()
+
+        print('==================================Training total time: %.02f min'%((end_epochs - start_epochs) / 60.0))
+
         avg_loss /= len(train_sampler)
+
+        avg_loss_epochs.append(avg_loss)
+        loss_epochs.append(losses_epoch)
+
+        accuracy_train_in_epochs.append(accuracies_train_epoch)
+        accuracy_train = accuracy_score(y_true_train_epoch, y_pred_train_epoch) * 100.0
+        accuracy_train_epochs.append(accuracy_train)
+
 
         epoch_time = time.time() - start_epoch_time
         print('Training Summary Epoch: [{0}]\t'
@@ -373,51 +412,49 @@ if __name__ == '__main__':
 
         start_iter = 0  # Reset start iteration for next epoch
         with torch.no_grad():
-            acc_mean, acc_std, output_data = evaluate(test_loader=test_loader,
+            accuracy_val, output_data = evaluate(test_loader=test_loader,
                                              device=device,
                                              model=model,
                                              decoder=decoder,
                                              target_decoder=decoder)
-        loss_results[epoch] = avg_loss
-        std_results[epoch] = acc_mean
-        acc_results[epoch] = acc_std
-        print('Validation Summary Epoch: [{0}]\t'
-              'Average accuracy {acc:.3f}\t'
-              'Std accuracy {std:.3f}\t'.format(
-            epoch + 1, acc=acc_mean, std=acc_std))
+        accuracy_val_epochs.append(accuracy_val)
 
-        values = {
-            'loss_results': loss_results,
-            'acc_results': acc_results,
-            'std_results': std_results
-        }
-        if args.visdom and main_proc:
-            visdom_logger.update(epoch, values)
-        if args.tensorboard and main_proc:
-            tensorboard_logger.update(epoch, values, model.named_parameters())
-            values = {
-                'Avg Train Loss': avg_loss,
-                'Avg accuracy': acc_mean,
-                'Std accuracy': acc_std
-            }
+        # Log epoch results
+        # import pdb; pdb.set_trace()
+        if args.tensorboard:
+            tensorboard_logger.update(epoch, {
+                'Loss/through_epochs': avg_loss},
+                parameters=model.named_parameters)
+        if args.tensorboard:
+            tensorboard_logger.update(epoch, {
+                'train': accuracy_train,
+                'validation': accuracy_val
+            }, together=True, name='Accuracy/through_epochs')
+
+        print('Validation Summary Epoch: [{0}]\t'
+              'Avg Loss {loss:.3f}\t'
+              'Train Accuracy {acc_train:.3f}\t'
+              'Val Accuracy {acc_val:.3f}\t'.format(
+            epoch + 1, loss=avg_loss, acc_train=accuracy_train, acc_val=accuracy_val))
+
 
         if main_proc and args.checkpoint:
             file_path = '%s/deepspeech_%d.pth.tar' % (save_folder, epoch + 1)
-            torch.save(DeepSpeech.serialize(model, optimizer=optimizer, amp=amp, epoch=epoch, loss_results=loss_results,
-                                            std_results=std_results, acc_results=acc_results),
+            torch.save(DeepSpeech.serialize(model, optimizer=optimizer, amp=amp, epoch=epoch),
                        file_path)
         # anneal lr
         for g in optimizer.param_groups:
             g['lr'] = g['lr'] / args.learning_anneal
         print('Learning rate annealed to: {lr:.6f}'.format(lr=g['lr']))
 
-        if main_proc and (best_wer is None or best_wer > acc_mean):
-            print("Found better validated model, saving to %s" % args.model_path)
-            torch.save(DeepSpeech.serialize(model, optimizer=optimizer, amp=amp, epoch=epoch, loss_results=loss_results,
-                                            wer_results=std_results, cer_results=acc_results)
-                       , args.model_path)
-            best_wer = acc_mean
-            avg_loss = 0
+        # TO DO: refazer isso do meu jeito eh importante sim salvar o best validated model
+        # if main_proc and (best_wer is None or best_wer > acc_mean):
+        #     print("Found better validated model, saving to %s" % args.model_path)
+        #     torch.save(DeepSpeech.serialize(model, optimizer=optimizer, amp=amp, epoch=epoch, loss_results=loss_results,
+        #                                     wer_results=std_results, cer_results=acc_results)
+        #                , args.model_path)
+        #     best_wer = acc_mean
+        #     avg_loss = 0
 
         if not args.no_shuffle:
             print("Shuffling batches...")
