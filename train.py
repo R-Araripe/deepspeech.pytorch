@@ -120,28 +120,33 @@ if __name__ == '__main__':
 
     print('AAAAAAAHHHHH IT STARTED')
 
+    PATH_DATA = '/home/rebeca.araripe/data/FinalProject'
+
     # Try to add keys to arg
     args.cuda = True
     args.visdom = False
     args.checkpoint = True
     args.finetune = True
     args.no_sorta_grad = True
-    args.continue_from = '../Data/Models/librispeech_pretrained_v2.pth'
-    metadata_path  = '../Data/raw/PCGITA_metadata.xlsx'
+    args.continue_from = os.path.join(PATH_DATA, 'Models/librispeech_pretrained_v2.pth')
+    metadata_path = os.path.join(PATH_DATA, 'raw/PCGITA_metadata.xlsx')
+    args.log_dir = os.path.join(PATH_DATA, 'Results/visualize/deepspeech')
     args.cuda = True
-    which_cuda = 'cuda:0'
+    which_cuda = 'cuda'
 
     args.tensorboard = True
     args.log_params = True  # for now while I fix the other stuff
     generate_graph = False
-    args.batch_size = 10
+    args.epochs = 15
     reg = 1e-3
+    args.batch_size = 8
 
-    data_category = 'monologues'
+    data_category = 'read-text' # vowels
     data_subcategory = '' # AEIOU
 
-    args.train_manifest = '../Data/downsampled-16k/manifest_train_%s-42-%s.txt'%((data_category, data_subcategory))
-    args.val_manifest = '../Data/downsampled-16k/manifest_val_%s-42-%s.txt'%((data_category, data_subcategory))
+    args.train_manifest = os.path.join(PATH_DATA, 'downsampled-16k/manifest_train_%s-42-%s.txt'%((data_category, data_subcategory)))
+    args.val_manifest = os.path.join(PATH_DATA, 'downsampled-16k/manifest_val_%s-42-%s.txt'%((data_category, data_subcategory)))
+
 
     # Create sufix for logging
     sufix = '%s_data=%s_batchsize=%i_reg=%.2E'%((str(datetime.now()), data_category + data_subcategory, args.batch_size, reg))
@@ -224,7 +229,6 @@ if __name__ == '__main__':
 
     decoder = MyDecoder(labels)
 
-    # TO DO: If I'm ever going to split train-val-test(?) here, I'll have to do before this. Maybe generate a manifest for each? for k-fold cross-validation
     train_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.train_manifest, metadata_file_path=metadata_path, labels=labels,
                                        normalize=True, speed_volume_perturb=args.speed_volume_perturb, spec_augment=args.spec_augment)
 
@@ -233,6 +237,7 @@ if __name__ == '__main__':
 
     print('\n Num samples train dataset: ', len(train_dataset))
     print('\n Num samples val   dataset: ', len(test_dataset))
+
 
     if not args.distributed:
         train_sampler = BucketingSampler(train_dataset, batch_size=args.batch_size, shuffle=True)

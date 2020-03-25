@@ -232,10 +232,24 @@ class BucketingSampler(Sampler):
         self.data_source = data_source
         ids = list(range(0, len(data_source)))
 
+        remainder = len(ids) % batch_size
+
+        # import pdb; pdb.set_trace()
+
         if shuffle:  # maybe I should make it stratified he
             np.random.shuffle(ids)
 
-        self.bins = [ids[i:i + batch_size] for i in range(0, len(ids), batch_size)]
+        bins = [ids[i:i + batch_size] for i in range(0, len(ids[:- remainder - 1]), batch_size)]
+
+        [bins[i].append(ids[-1 - i]) for i in range(remainder)]
+
+        for bin in bins:
+            print(len(bin))
+
+        for bin in bins:
+            print(bin)
+
+        self.bins = bins
 
     def __iter__(self):
         for ids in self.bins:
