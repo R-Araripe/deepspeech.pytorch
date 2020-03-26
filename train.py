@@ -138,18 +138,23 @@ if __name__ == '__main__':
     args.log_params = True  # for now while I fix the other stuff
     generate_graph = False
     args.epochs = 15
-    reg = 1e-3
-    args.batch_size = 8
+    reg = 1e-2
+    args.batch_size = 32
+    args.lr = 3e-4  # 3e-4 default
+    opt_alg = 'sgd'
 
-    data_category = 'read-text' # vowels
-    data_subcategory = '' # AEIOU
+    freeze_conv = False
+    freeze_rnns = True
+
+    data_category = 'vowels'  # vowels, read-text, monologues
+    data_subcategory = 'A'  # AEIOU
 
     args.train_manifest = os.path.join(PATH_DATA, 'downsampled-16k/manifest_train_%s-42-%s.txt'%((data_category, data_subcategory)))
     args.val_manifest = os.path.join(PATH_DATA, 'downsampled-16k/manifest_val_%s-42-%s.txt'%((data_category, data_subcategory)))
 
 
     # Create sufix for logging
-    sufix = '%s_data=%s_batchsize=%i_reg=%.2E'%((str(datetime.now()), data_category + data_subcategory, args.batch_size, reg))
+    sufix = '%s-data=%s-batchsize=%i-reg=%.2E-freeze_conv=%s-freeze_rnns=%s-opt_alg=%s'%((str(datetime.now()), data_category + data_subcategory, args.batch_size, reg, str(freeze_conv), str(freeze_rnns), opt_alg))
 
 
     # Set seeds for determinism
@@ -260,10 +265,25 @@ if __name__ == '__main__':
             input_sizes = input_percentages.mul_(int(inputs.size(3))).int()
             tensorboard_logger.add_image(inputs, input_sizes, targets, network=model) # add graph doesn't work if model is in gpu
 
+    if freeze_conv:
+        model.conv.requires_grad_(requires_grad=False)
+
+    # import pdb; pdb.set_trace()
+
+    if freeze_rnns:
+        model.rnns.requires_grad_(requires_grad=False)
+
+
+
+
     model = model.to(device)
     parameters = model.parameters()
-    optimizer = torch.optim.SGD(parameters, lr=args.lr,
-                                momentum=args.momentum, nesterov=True, weight_decay=reg)
+
+    if opt_alg == 'adam':
+        optimizer = torch.optim.Adam(parameters, lr=args.lr, weight_decay=reg)
+    if opt_alg == 'sgd':
+        optimizer = torch.optim.SGD(parameters, lr=args.lr, weight_decay=reg)
+
 
     model, optimizer = amp.initialize(model, optimizer,
                                       opt_level=args.opt_level,

@@ -86,7 +86,7 @@ def evaluate(test_loader, device, model, decoder, target_decoder, save_output=Fa
         total_correct += get_number_of_correct(y_true, y_pred)
 
     accuracy = accuracy_score(y_true, y_pred) * 100.0
-    cm = confusion_matrix(target_labels, decoded_output, labels=[0, 1])
+    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
 
     print('confusion matrix:')
     print(pd.DataFrame(cm))

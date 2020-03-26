@@ -224,7 +224,7 @@ class AudioDataLoader(DataLoader):
 
 
 class BucketingSampler(Sampler):
-    def __init__(self, data_source, batch_size=1, shuffle=False):
+    def __init__(self, data_source, batch_size=1, shuffle=False, redistribrute=False):
         """
         Samples batches assuming they are in order of size to batch similarly sized samples together.
         """
@@ -232,8 +232,10 @@ class BucketingSampler(Sampler):
         self.data_source = data_source
         ids = list(range(0, len(data_source)))
 
-        remainder = len(ids) % batch_size
-
+        if redistribrute:
+            remainder = len(ids) % batch_size
+        else:
+            remainder = 0
         # import pdb; pdb.set_trace()
 
         if shuffle:  # maybe I should make it stratified he
@@ -241,7 +243,8 @@ class BucketingSampler(Sampler):
 
         bins = [ids[i:i + batch_size] for i in range(0, len(ids[:- remainder - 1]), batch_size)]
 
-        [bins[i].append(ids[-1 - i]) for i in range(remainder)]
+        if remainder:
+            [bins[i].append(ids[-1 - i]) for i in range(remainder)]
 
         for bin in bins:
             print(len(bin))

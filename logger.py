@@ -47,7 +47,7 @@ class TensorBoardLogger(object):
 
         self.id = id
         # TO DO get parameters and transform to string to identify run
-        self.tensorboard_writer = SummaryWriter(log_dir_name, flush_secs=20) #
+        self.tensorboard_writer = SummaryWriter(log_dir_name, flush_secs=10)
         self.log_params = log_params
 
     def update(self, iter, values, parameters=None, debug=False, together=False, name=''):
@@ -71,7 +71,8 @@ class TensorBoardLogger(object):
                 tag = tag.replace('.', '/')
                 # import pdb; pdb.set_trace()
                 self.tensorboard_writer.add_histogram(tag, value, iter)
-                self.tensorboard_writer.add_histogram(tag + '/grad', value.grad, iter)
+                if value.requires_grad:
+                    self.tensorboard_writer.add_histogram(tag + '/grad', value.grad, iter)
 
 
     def load_previous_values_libri(self, start_epoch, values):
