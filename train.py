@@ -17,7 +17,8 @@ from sklearn.metrics import accuracy_score, confusion_matrix
 from warpctc_pytorch import CTCLoss
 
 from data.data_loader import (AudioDataLoader, BucketingSampler,
-                              DistributedBucketingSampler, SpectrogramDataset)
+                              DistributedBucketingSampler,
+                              RandomBucketingSampler, SpectrogramDataset)
 from decoder import GreedyDecoder, MyDecoder
 from logger import TensorBoardLogger, VisdomLogger
 from model import DeepSpeech, supported_rnns
@@ -142,6 +143,7 @@ if __name__ == '__main__':
     args.batch_size = 32
     args.lr = 3e-4  # 3e-4 default
     opt_alg = 'sgd'
+    sampler = 'random' # random, bucketing
 
     freeze_conv = False
     freeze_rnns = True
@@ -154,7 +156,7 @@ if __name__ == '__main__':
 
 
     # Create sufix for logging
-    sufix = '%s-data=%s-batchsize=%i-reg=%.2E-freeze_conv=%s-freeze_rnns=%s-opt_alg=%s'%((str(datetime.now()), data_category + data_subcategory, args.batch_size, reg, str(freeze_conv), str(freeze_rnns), opt_alg))
+    sufix = '%s-data=%s-batchsize=%i-reg=%.2E-freeze_conv=%s-freeze_rnns=%s-opt_alg=%s-sampler=%s'%((str(datetime.now()), data_category + data_subcategory, args.batch_size, reg, str(freeze_conv), str(freeze_rnns), opt_alg, sampler))
 
 
     # Set seeds for determinism
@@ -245,10 +247,12 @@ if __name__ == '__main__':
 
 
     if not args.distributed:
-        train_sampler = BucketingSampler(train_dataset, batch_size=args.batch_size, shuffle=True)
+        if sampler == 'bucketing':
+            train_sampler = BucketingSampler(train_dataset, batch_size=args.batch_size, shuffle=True)
+        if sampler == 'random':
+            train_sampler = RandomBucketingSampler(train_dataset, batch_size=args.batch_size)
     else:
-        train_sampler = DistributedBucketingSampler(train_dataset, batch_size=args.batch_size,
-                                                    num_replicas=args.world_size, rank=args.rank)
+        train_sampler = DistributedBucketingSampler(train_dataset, batch_size=args.batch_size, num_replicas=args.world_size, rank=args.rank)
     train_loader = AudioDataLoader(train_dataset,
                                    num_workers=args.num_workers, batch_sampler=train_sampler)
     test_loader = AudioDataLoader(test_dataset, batch_size=args.batch_size,
@@ -484,6 +488,8 @@ if __name__ == '__main__':
         if not args.no_shuffle:
             print("Shuffling batches...")
             train_sampler.shuffle(epoch)
+        if sampler == 'random':
+            train_sampler.recompute_bins()
 
     if args.tensorboard:
         tensorboard_logger.close()

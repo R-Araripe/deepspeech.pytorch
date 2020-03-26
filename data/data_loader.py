@@ -266,6 +266,40 @@ class BucketingSampler(Sampler):
         np.random.shuffle(self.bins)
 
 
+class RandomBucketingSampler(Sampler):
+    def __init__(self, data_source, batch_size=1, num_iter=None, redistribrute=False):
+        """
+        Samples batches randomly.
+
+        """
+        super(BucketingSampler, self).__init__(data_source)
+        self.batch_size = batch_size
+        if num_iter is None:
+            self.num_iter = math.ceil(len(data_source) / batch_size)
+        else:
+            self.num_iter = num_iter
+        self.data_source = data_source
+        self.ids = list(range(0, len(data_source)))
+
+        self.recompute_bins()
+
+
+    def recompute_bins(self):
+
+        self.bins = [np.random.choice(self.ids, size=self.batch_size, replace=False) for it in range(self.num_iter)]
+
+    def __iter__(self):
+        for ids in self.bins:
+            np.random.shuffle(ids)
+            yield ids
+
+    def __len__(self):
+        return len(self.bins)
+
+    def shuffle(self, epoch):
+        np.random.shuffle(self.bins)
+
+
 class DistributedBucketingSampler(Sampler):
     def __init__(self, data_source, batch_size=1, num_replicas=None, rank=None):
         """
