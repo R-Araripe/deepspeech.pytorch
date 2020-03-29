@@ -100,6 +100,12 @@ class BatchRNN(nn.Module):
             x = x.view(x.size(0), x.size(1), 2, -1).sum(2).view(x.size(0), x.size(1), -1)  # (TxNxH*2) -> (TxNxH) by sum
         return x
 
+class Identity(nn.Module):
+    def __init__(self):
+        super(Identity, self).__init__()
+
+    def forward(self, x):
+        return x
 
 class Lookahead(nn.Module):
     # Wang et al 2016 - Lookahead Convolution Layer for Unidirectional Recurrent Neural Networks
@@ -208,7 +214,14 @@ class DeepSpeech(nn.Module):
 
         # print('size x received  ', x.size())
 
+        # x shape is (BxCxDxT) :
+
+        # import pdb; pdb.set_trace()
+
         x, _ = self.conv(x, output_lengths)
+
+
+        # import pdb; pdb.set_trace()
 
         # print('size x after conv  ', x.size())
 

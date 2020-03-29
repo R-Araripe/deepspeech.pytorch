@@ -272,7 +272,7 @@ class RandomBucketingSampler(Sampler):
         Samples batches randomly.
 
         """
-        super(BucketingSampler, self).__init__(data_source)
+        super(RandomBucketingSampler, self).__init__(data_source)
         self.batch_size = batch_size
         if num_iter is None:
             self.num_iter = math.ceil(len(data_source) / batch_size)

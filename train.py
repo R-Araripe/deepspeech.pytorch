@@ -11,18 +11,20 @@ import numpy as np
 import pandas as pd
 import torch.distributed as dist
 import torch.utils.data.distributed
+from sklearn.metrics import accuracy_score, confusion_matrix
+
 from apex import amp
 from apex.parallel import DistributedDataParallel
-from sklearn.metrics import accuracy_score, confusion_matrix
-from warpctc_pytorch import CTCLoss
-
 from data.data_loader import (AudioDataLoader, BucketingSampler,
                               DistributedBucketingSampler,
                               RandomBucketingSampler, SpectrogramDataset)
 from decoder import GreedyDecoder, MyDecoder
 from logger import TensorBoardLogger, VisdomLogger
-from model import DeepSpeech, supported_rnns
+from model import DeepSpeech, Identity, supported_rnns
 from utils import check_loss, reduce_tensor
+
+# from warpctc_pytorch import CTCLoss
+
 
 parser = argparse.ArgumentParser(description='DeepSpeech training')
 parser.add_argument('--train-manifest', metavar='DIR',
@@ -88,6 +90,7 @@ parser.add_argument('--opt-level', default='O1', type=str)
 parser.add_argument('--keep-batchnorm-fp32', type=str, default=None)
 parser.add_argument('--loss-scale', default=1,
                     help='Loss scaling used by Apex. Default is 1 due to warp-ctc not supporting scaling of gradients')
+parser.add_argument('--local_rank', default=0)
 
 torch.manual_seed(123456)
 torch.cuda.manual_seed_all(123456)
@@ -131,32 +134,55 @@ if __name__ == '__main__':
     args.no_sorta_grad = True
     args.continue_from = os.path.join(PATH_DATA, 'Models/librispeech_pretrained_v2.pth')
     metadata_path = os.path.join(PATH_DATA, 'raw/PCGITA_metadata.xlsx')
+    data_category = 'read-text'  # vowels, read-text, monologues
+    data_subcategory = ''  # AEIOU
+    args.train_manifest = os.path.join(PATH_DATA, 'downsampled-16k/manifest_train_%s-42-%s.txt'%((data_category, data_subcategory)))
+    args.val_manifest = os.path.join(PATH_DATA, 'downsampled-16k/manifest_val_%s-42-%s.txt'%((data_category, data_subcategory)))
     args.log_dir = os.path.join(PATH_DATA, 'Results/visualize/deepspeech')
     args.cuda = True
     which_cuda = 'cuda'
+    args.rnn_type = 'lstm'
 
     args.tensorboard = True
-    args.log_params = True  # for now while I fix the other stuff
+    args.log_params = True
     generate_graph = False
-    args.epochs = 15
+    args.epochs = 30
     reg = 1e-2
-    args.batch_size = 32
+    args.batch_size = 9
     args.lr = 3e-4  # 3e-4 default
-    opt_alg = 'sgd'
-    sampler = 'random' # random, bucketing
+    opt_alg = 'adam'
+    sampler = 'random' # random, bucketing, 'distributed'
 
-    freeze_conv = False
+
+    # args.gpus = 1  # number of gpus per node
+    # args.nodes = 1 # total number of nodes (machines) we are using
+    # args.nr = 0 # is the rank of current node (machine) within all the machines
+    # args.world_size = args.gpus * args.nodes
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '1234' # '29500'
+    args.dist_backend = 'nccl'
+    args.dist_url = None
+    # args.rank = 0 # node rank
+    # args.gpu_rank = None
+
+
+    freeze_conv = True
     freeze_rnns = True
 
-    data_category = 'vowels'  # vowels, read-text, monologues
-    data_subcategory = 'A'  # AEIOU
+    remove_bn_conv = True
+    remove_bn_rnns = False
+    remove_bn_fc = False
 
-    args.train_manifest = os.path.join(PATH_DATA, 'downsampled-16k/manifest_train_%s-42-%s.txt'%((data_category, data_subcategory)))
-    args.val_manifest = os.path.join(PATH_DATA, 'downsampled-16k/manifest_val_%s-42-%s.txt'%((data_category, data_subcategory)))
+
+    num_iter_cv = 2
 
 
     # Create sufix for logging
-    sufix = '%s-data=%s-batchsize=%i-reg=%.2E-freeze_conv=%s-freeze_rnns=%s-opt_alg=%s-sampler=%s'%((str(datetime.now()), data_category + data_subcategory, args.batch_size, reg, str(freeze_conv), str(freeze_rnns), opt_alg, sampler))
+    transfer = args.continue_from is not None
+
+    sampler = 'distributed' if args.world_size > 1 else sampler
+
+    sufix = '%s-data=%s-batchsize=%i-reg=%.2E-freeze_conv=%s-freeze_rnns=%s-opt_alg=%s-sampler=%s-remove_bn_conv=%s-remove_bn_rnns=%s-remove_bn_fc=%s-transfer=%s'%((str(datetime.now()), data_category + data_subcategory, args.batch_size, reg, str(freeze_conv), str(freeze_rnns), opt_alg, sampler, str(remove_bn_conv), str(remove_bn_rnns), str(remove_bn_fc), str(transfer)))
 
 
     # Set seeds for determinism
@@ -166,14 +192,16 @@ if __name__ == '__main__':
     random.seed(args.seed)
 
     device = torch.device(which_cuda if args.cuda else "cpu")
-    args.distributed = args.world_size > 1
+    distributed = args.world_size > 1
     main_proc = True
-    device = torch.device(which_cuda if args.cuda else "cpu")
-    if args.distributed:
+
+    if distributed:
+        print('Distributed!!')
         if args.gpu_rank:
             torch.cuda.set_device(int(args.gpu_rank))
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
+        print('Initiated process group')
         main_proc = args.rank == 0  # Only the first proc should save models
     save_folder = args.save_folder
     os.makedirs(save_folder, exist_ok=True)  # Ensure save folder exists
@@ -245,8 +273,9 @@ if __name__ == '__main__':
     print('\n Num samples train dataset: ', len(train_dataset))
     print('\n Num samples val   dataset: ', len(test_dataset))
 
+    # for it in range(num_iter_cv):
 
-    if not args.distributed:
+    if not distributed:
         if sampler == 'bucketing':
             train_sampler = BucketingSampler(train_dataset, batch_size=args.batch_size, shuffle=True)
         if sampler == 'random':
@@ -271,13 +300,28 @@ if __name__ == '__main__':
 
     if freeze_conv:
         model.conv.requires_grad_(requires_grad=False)
-
-    # import pdb; pdb.set_trace()
+        # Free batch norm layer to learn running average
+        model.conv.seq_module[1].requires_grad_(requires_grad=True)
+        model.conv.seq_module[4].requires_grad_(requires_grad=True)
 
     if freeze_rnns:
         model.rnns.requires_grad_(requires_grad=False)
+        for i in range(1, len(model.rnns)):
+            model.rnns[i].batch_norm.requires_grad_(requires_grad=True)
+
+    if remove_bn_conv:
+        model.conv.seq_module[1] = Identity()
+        model.conv.seq_module[4] = Identity()
+
+    if remove_bn_rnns:
+        for i in range(1, len(model.rnns)):
+            model.rnns[i].batch_norm = Identity()
+
+    if remove_bn_fc:
+        model.fc[0] = Identity()
 
 
+    # import pdb; pdb.set_trace()
 
 
     model = model.to(device)
@@ -300,7 +344,7 @@ if __name__ == '__main__':
     if amp_state is not None:
         amp.load_state_dict(amp_state)
 
-    if args.distributed:
+    if distributed:
         model = DistributedDataParallel(model)
     print(model)
     print("Number of parameters: %d" % DeepSpeech.get_param_size(model))
@@ -318,6 +362,7 @@ if __name__ == '__main__':
 
     start_epochs = time.time()
     for epoch in range(start_epoch, args.epochs):
+        print('Epoch %i started.'%(epoch))
         model.train()
         end = time.time()
         start_epoch_time = time.time()
@@ -375,11 +420,13 @@ if __name__ == '__main__':
             print( pd.DataFrame(cm))
 
 
-            if args.distributed:
+            if distributed:
                 loss = loss.to(device)
                 loss_value = reduce_tensor(loss, args.world_size).item()
             else:
                 loss_value = loss.item()
+
+            print('Computed loss.')
 
             losses_epoch.append(loss_value)
 
@@ -390,16 +437,23 @@ if __name__ == '__main__':
                     'Accuracy/train_through_iterations': accuracy_train
                 })
 
+            print('Logged to tensorboard.')
+
             # Check to ensure valid loss was calculated
             valid_loss, error = check_loss(loss, loss_value)
             if valid_loss:
 
                 optimizer.zero_grad()
+                print('Grad zeroed.')
                 # compute gradient
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
-                torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_norm)
+                print('Backward done.')
+                # import pdb; pdb.set_trace()
+                torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer).to(device), args.max_norm.to(device))
+                print('Cliped grad norm.')
                 optimizer.step()
+                print('Step done.')
             else:
                 print(error)
                 print('Skipping grad update')
@@ -419,6 +473,7 @@ if __name__ == '__main__':
                     (epoch + 1), (i + 1), len(train_sampler), batch_time=batch_time, data_time=data_time, loss=losses))
 
             del loss, out, float_out
+            print('Deleted loss, out, float_out')
 
         end_epochs = time.time()
 
@@ -467,10 +522,10 @@ if __name__ == '__main__':
             epoch + 1, loss=avg_loss, acc_train=accuracy_train, acc_val=accuracy_val))
 
 
-        if main_proc and args.checkpoint:
-            file_path = '%s/deepspeech_%d.pth.tar' % (save_folder, epoch + 1)
-            torch.save(DeepSpeech.serialize(model, optimizer=optimizer, amp=amp, epoch=epoch),
-                       file_path)
+        # if main_proc and args.checkpoint:
+        #     file_path = '%s/deepspeech_%d.pth.tar' % (save_folder, epoch + 1)
+        #     torch.save(DeepSpeech.serialize(model, optimizer=optimizer, amp=amp, epoch=epoch),
+        #                file_path)
         # anneal lr
         for g in optimizer.param_groups:
             g['lr'] = g['lr'] / args.learning_anneal
@@ -490,6 +545,7 @@ if __name__ == '__main__':
             train_sampler.shuffle(epoch)
         if sampler == 'random':
             train_sampler.recompute_bins()
+
 
     if args.tensorboard:
         tensorboard_logger.close()

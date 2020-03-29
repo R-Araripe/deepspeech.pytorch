@@ -34,15 +34,17 @@ SM : Switchboard mild
 SS : Switchboard strong
 """
 
+import random
+
 import librosa
 import librosa.display
-import numpy as np
-import random
 import matplotlib
-matplotlib.use('TkAgg')
+# matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
-from .sparse_image_warp import sparse_image_warp
+import numpy as np
 import torch
+
+from .sparse_image_warp import sparse_image_warp
 
 
 def time_warp(spec, W=5):
