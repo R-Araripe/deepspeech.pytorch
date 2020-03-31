@@ -127,6 +127,7 @@ if __name__ == '__main__':
     PATH_DATA = '/home/rebeca.araripe/data/FinalProject'
 
     # Try to add keys to arg
+    args.opt_level = 'O1' # 'O1'
     args.cuda = True
     args.visdom = False
     args.checkpoint = True
@@ -173,8 +174,6 @@ if __name__ == '__main__':
     remove_bn_rnns = False
     remove_bn_fc = False
 
-
-    num_iter_cv = 2
 
 
     # Create sufix for logging
@@ -287,6 +286,7 @@ if __name__ == '__main__':
     test_loader = AudioDataLoader(test_dataset, batch_size=args.batch_size,
                                   num_workers=args.num_workers, shuffle=True)
 
+    import pdb; pdb.set_trace()
 
     if (not args.no_shuffle and start_epoch != 0) or args.no_sorta_grad:
         print("Shuffling batches for the following epochs")
@@ -360,6 +360,8 @@ if __name__ == '__main__':
     accuracy_train_epochs = [] # list
     accuracy_val_epochs = []  # list
 
+    # import pdb; pdb.set_trace()
+
     start_epochs = time.time()
     for epoch in range(start_epoch, args.epochs):
         print('Epoch %i started.'%(epoch))
@@ -380,13 +382,19 @@ if __name__ == '__main__':
             # print('input_percentages: ', input_percentages)  # de onde isso vem??? ah, acho que eh o tamanho do audio
             # print('target sizes: ', target_sizes)
             input_sizes = input_percentages.mul_(int(inputs.size(3))).int()
+
             # print('input_sizes: ', input_sizes)
             # measure data loading time
             data_time.update(time.time() - end)
             inputs = inputs.to(device)
             targets = targets.to(device)
 
+            print('Right before training model.')
+            # print(inputs.type())
+            # inputs = inputs.float()
+            # print(inputs.type())
             out, output_sizes = model(inputs, input_sizes)
+            print('Right after training model.')
 
             out = out.transpose(0, 1)  # TxNxH
 
@@ -450,7 +458,7 @@ if __name__ == '__main__':
                     scaled_loss.backward()
                 print('Backward done.')
                 # import pdb; pdb.set_trace()
-                torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer).to(device), args.max_norm.to(device))
+                torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_norm)
                 print('Cliped grad norm.')
                 optimizer.step()
                 print('Step done.')
