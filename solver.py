@@ -16,6 +16,8 @@ from data.data_loader import (AudioDataLoader, BucketingSampler,
                               DistributedBucketingSampler,
                               RandomBucketingSampler, SpectrogramDataset)
 from logger import TensorBoardLogger
+from model import DeepSpeech
+from utils import AverageMeter
 
 
 class Solver(object):
@@ -125,13 +127,6 @@ class Solver(object):
             extra = ', '.join('"%s"' % k for k in list(kwargs.keys()))
             raise ValueError('Unrecognized arguments %s' % extra)
 
-
-        self.optimizer = None
-        self.distributed = None
-        self.criterion = None
-
-
-
         self._reset()
 
     def _reset(self):
@@ -141,11 +136,15 @@ class Solver(object):
         """
         # Set up some variables for book-keeping
         self.epoch = 0
-        self.best_val_acc = 0
+        self.best_acc_val = 0.0
         self.best_params = {}
-        self.loss_history = []
-        self.train_acc_history = []
-        self.val_acc_history = []
+        self.loss_epochs = []
+        self.accuracy_train_epochs = []
+        self.accuracy_val_epochs = []
+
+        self.optimizer = None
+        self.distributed = None
+        self.criterion = None
 
         # Make a deep copy of the optim_config for each parameter
         self.optim_configs = {}
@@ -252,6 +251,7 @@ class Solver(object):
         os.environ['MASTER_ADDR'] = '127.0.0.1'
         os.environ['MASTER_PORT'] = '1234'
 
+        main_proc = True
         self.distributed = world_size > 1
 
         if self.distributed:
@@ -311,7 +311,6 @@ class Solver(object):
             self.model = DistributedDataParallel(self.model)
 
         print(self.model)
-        print("Number of parameters: %d" % DeepSpeech.get_param_size(self.model))
 
         if self.criterion_type == 'cross_entropy_loss':
             self.criterion = torch.nn.CrossEntropyLoss()
@@ -319,14 +318,12 @@ class Solver(object):
         #  Useless for now because I don't save.
         accuracies_train_iters = []
         losses_iters = []
-        loss_epochs = []
-        accuracy_train_epochs = []
-        accuracy_val_epochs = []
 
         avg_loss = 0
         batch_time = AverageMeter()
         epoch_time = AverageMeter()
         losses = AverageMeter()
+
         start_training = time.time()
         for epoch in range(self.start_epoch, self.epochs):
 
@@ -388,18 +385,18 @@ class Solver(object):
 
             # Loss log
             avg_loss += loss_value
-            loss_epochs.append(avg_loss)
+            self.loss_epochs.append(avg_loss)
 
             # Accuracy train log
             acc_train, _ = self.check_accuracy(y_true_train_epoch, y_pred=y_pred_train_epoch)
-            accuracy_train_epochs.append(acc_train)
+            self.accuracy_train_epochs.append(acc_train)
 
             # Accuracy val log
             for data in val_loader:
                 inputs, targets, input_percentages, target_sizes = data
                 input_sizes = input_percentages.mul_(int(inputs.size(3))).int()
             acc_val, y_pred_val = self.check_accuracy(targets.cpu(), inputs=inputs, input_sizes=input_sizes)
-            accuracy_val_epochs.append(acc_val)
+            self.accuracy_val_epochs.append(acc_val)
             cm = confusion_matrix(targets.cpu(), y_pred, labels=self.labels)
             print('Confusion matrix validation:')
             print(pd.DataFrame(cm))
@@ -413,6 +410,14 @@ class Solver(object):
                     'validation': acc_val
                 }, together=True, name='Accuracy/through_epochs')
 
+
+            # Keep track of the best model
+            if acc_val > self.best_acc_val:
+                self.best_acc_val = acc_val
+                self.best_params = {}
+                for k, v in self.model.named_parameters.items(): # TO DO: actually copy model and save later? idk..
+                    self.best_params[k] = v.clone()
+
             # Anneal learning rate. TO DO: find better way to this this specific to every parameter as cs231n does.
             for g in self.optimizer.param_groups:
                 g['lr'] = g['lr'] / self.learning_anneal
@@ -425,7 +430,6 @@ class Solver(object):
             # Rechoose batches elements
             if self.sampler_type == 'random':
                 train_sampler.recompute_bins()
-
 
         end_training = time.time()
 

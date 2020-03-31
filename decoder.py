@@ -234,6 +234,7 @@ class MyDecoder(object):
             out.append(label)
         return out
 
+
 class DeepSpeechDecoder(object):
 
     def decode(self, output):
