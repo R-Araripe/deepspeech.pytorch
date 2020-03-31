@@ -201,7 +201,7 @@ class MyDecoder(object):
 
     def __init__(self, labels):
         self.labels = labels
-        self.int_to_label =  dict([(i, c) for (i, c) in enumerate(labels)])
+        self.int_to_label = dict([(i, c) for (i, c) in enumerate(labels)])
 
     def decode(self, probs, output_sizes):
 
@@ -233,3 +233,12 @@ class MyDecoder(object):
             label = self.int_to_label[sequence[i].item()]
             out.append(label)
         return out
+
+class DeepSpeechDecoder(object):
+
+    def decode(self, output):
+
+        probs = torch.nn.functional.softmax(output, dim=1)
+        _, pred_labels = torch.max(probs, 1)
+
+        return pred_labels

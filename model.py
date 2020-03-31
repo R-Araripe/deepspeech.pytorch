@@ -255,7 +255,15 @@ class DeepSpeech(nn.Module):
 
         # print('size x after softmax  ', x.size())
 
-        return x, output_lengths
+        # Include my stuff here (and take out of train)
+
+        out = x.transpose(0, 1)  # TxNxH
+
+        float_out = out.float()  # ensure float32 for loss.
+
+        float_out_last = float_out[output_lengths.long() - 1, torch.arange(float_out.size(1)), :]
+
+        return float_out_last # non normalized probabilities
 
     def get_seq_lens(self, input_length):
         """

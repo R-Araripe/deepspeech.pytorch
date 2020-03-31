@@ -215,7 +215,7 @@ if __name__ == '__main__':
         tensorboard_logger = TensorBoardLogger(args.id, args.log_dir, args.log_params, comment=sufix)
 
     avg_loss, start_epoch, start_iter, optim_state, amp_state = 0, 0, 0, None, None
-    if args.continue_from:  # Starting from previous model
+    if args.continue_from:  # Starting from previous model (fora la no loop de cross-val)
         print("Loading checkpoint model %s" % args.continue_from)
         package = torch.load(args.continue_from, map_location=lambda storage, loc: storage)
         model = DeepSpeech.load_model_package(package)
@@ -393,19 +393,19 @@ if __name__ == '__main__':
             # print(inputs.type())
             # inputs = inputs.float()
             # print(inputs.type())
-            out, output_sizes = model(inputs, input_sizes)
-            print('Right after training model.')
+            float_out_last = model(inputs, input_sizes)
+            # print('Right after training model.')
 
-            out = out.transpose(0, 1)  # TxNxH
+            # out = out.transpose(0, 1)  # TxNxH
 
-            float_out = out.float()  # ensure float32 for loss. They don't seem to be normalized :)
-            # print('float out: ', float_out)
-            # print('output sizes ', output_sizes)
+            # float_out = out.float()  # ensure float32 for loss. They don't seem to be normalized :)
+            # # print('float out: ', float_out)
+            # # print('output sizes ', output_sizes)
 
-            # POR QUE SEMPRE OS MESMOS VALORES PRA TODOS MUNDO?? EXCETO O PRIMEIRO EXEMPLO DO MINIBATCH. EU DEVERIA MSM PEGAAR O ULTIMO?
-            float_out_last = float_out[output_sizes.long() - 1, torch.arange(float_out.size(1)), :]
-            # float_out_last = float_out[-1, :, :]
-            # import pdb; pdb.set_trace()
+            # # POR QUE SEMPRE OS MESMOS VALORES PRA TODOS MUNDO?? EXCETO O PRIMEIRO EXEMPLO DO MINIBATCH. EU DEVERIA MSM PEGAAR O ULTIMO?
+            # float_out_last = float_out[output_sizes.long() - 1, torch.arange(float_out.size(1)), :]
+            # # float_out_last = float_out[-1, :, :]
+            # # import pdb; pdb.set_trace()
 
             loss = criterion(float_out_last, targets.long()).to(device)
             loss = loss / inputs.size(0)  # average the loss by minibatch
@@ -425,7 +425,7 @@ if __name__ == '__main__':
 
             cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
             print('confusion matrix train step:')
-            print( pd.DataFrame(cm))
+            print(pd.DataFrame(cm))
 
 
             if distributed:
