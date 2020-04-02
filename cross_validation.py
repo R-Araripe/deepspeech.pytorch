@@ -1,31 +1,32 @@
 
 
 
-import datetime
 import os
 import random
+from datetime import datetime
 
 import numpy as np
 import torch
 
 from data.data_loader import SpectrogramDataset
 from decoder import DeepSpeechDecoder
-from model import DeepSpeech
+from model import DeepSpeech, supported_rnns
 from solver import Solver
 
 #------------Settings-----------------------------
 transfer = False
 tensorboard = True
 
-num_iter_cv = 1
+num_iter_cv = 30
 
 rnn_type = 'lstm'
 hidden_size = 1024
 hidden_layers = 5
 update_rule = 'sgd'  # 'sgd', 'adam'
 criterion_type = 'cross_entropy_loss'
-batch_size = 8
+batch_size = 7
 sampler = 'random'
+epochs = 30
 
 seed = 42
 device = torch.device('cuda')
@@ -42,7 +43,7 @@ bidirectional = True
 
 PATH_DATA = '/home/rebeca.araripe/data/FinalProject'
 metadata_path =  os.path.join(PATH_DATA, 'raw/PCGITA_metadata.xlsx')
-data_category = 'read-text'  # vowels, read-text, monologues
+data_category = 'monologues'  # vowels, read-text, monologues
 data_subcategory = ''  # AEIOU
 train_manifest = os.path.join(PATH_DATA, 'downsampled-16k/manifest_train_%s-42-%s.txt'%((data_category, data_subcategory)))
 val_manifest = os.path.join(PATH_DATA, 'downsampled-16k/manifest_val_%s-42-%s.txt'%((data_category, data_subcategory)))
@@ -69,7 +70,7 @@ if transfer:
 
     id = 'libri'
 else:
-    id = 'scracth'
+    id = 'scratch'
 
 best_val = 0.0
 for it in range(num_iter_cv):
@@ -77,7 +78,7 @@ for it in range(num_iter_cv):
     lr = 10**np.random.uniform(-4, -2)
     reg = 10**np.random.uniform(-3, -1)
 
-    model = DeepSpeech(rnn_hidden_size=hidden_size, nb_layers=hidden_layers, labels=labels, rnn_type=rnn_type, audio_conf=audio_conf, bidirectional=bidirectional)
+    model = DeepSpeech(rnn_hidden_size=hidden_size, nb_layers=hidden_layers, labels=labels, rnn_type=supported_rnns[rnn_type], audio_conf=audio_conf, bidirectional=bidirectional)
 
     decoder = DeepSpeechDecoder()
 
@@ -104,11 +105,14 @@ for it in range(num_iter_cv):
     solver = Solver(model, {'train': train_dataset, 'val': val_dataset}, decoder,
                     lr=lr,
                     reg=reg,
+                    epochs=epochs,
                     criterion_type=criterion_type,
                     update_rule=update_rule,
                     id=id,
+                    sufix=sufix,
                     log_dir=log_dir,
-                    tensorboard=tensorboard)
+                    tensorboard=tensorboard,
+                    device=device)
 
     solver.train()
 
@@ -120,16 +124,14 @@ for it in range(num_iter_cv):
              'val_acc_history': solver.accuracy_val_epochs
             }
 
-    results[(lr, reg)] = stats
-
-    if solver.best_val_acc > best_val:
-        best_val = solver.best_val_acc
+    if solver.best_acc_val > best_val:
+        best_val = solver.best_acc_val
         best_stats = stats
         best_model = model
         best_solver = solver
 
     # Print results
-    print('lr %e reg %e hid %d  val accuracy: %f' % (lr, reg, val_accuracy))
+    print('lr %e reg %e  val accuracy: %f' % (lr, reg, val_accuracy))
 
 
 print('best validation accuracy achieved: %f' % best_val)

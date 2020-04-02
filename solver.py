@@ -17,7 +17,7 @@ from data.data_loader import (AudioDataLoader, BucketingSampler,
                               RandomBucketingSampler, SpectrogramDataset)
 from logger import TensorBoardLogger
 from model import DeepSpeech
-from utils import AverageMeter
+from utils import AverageMeter, check_loss, reduce_tensor
 
 
 class Solver(object):
@@ -115,6 +115,7 @@ class Solver(object):
         self.reg = kwargs.pop('reg', 1e-2)
         self.criterion_type = kwargs.pop('criterion_type', 'cross_entropy_loss')
         self.learning_anneal = kwargs.pop('learning_anneal', 1.01)
+        self.epochs = kwargs.pop('epochs', 5)
 
         self.opt_level = kwargs.pop('opt_level', 'O1')
         self.loss_scale = kwargs.pop('loss_scale', 1)
@@ -135,7 +136,6 @@ class Solver(object):
         manually.
         """
         # Set up some variables for book-keeping
-        self.epoch = 0
         self.best_acc_val = 0.0
         self.best_params = {}
         self.loss_epochs = []
@@ -148,7 +148,7 @@ class Solver(object):
 
         # Make a deep copy of the optim_config for each parameter
         self.optim_configs = {}
-        for p, val in self.model.named_parameters:
+        for p, val in self.model.named_parameters():  # it is still not useful since I'm not sure how optim updates are made in pytorch. Is it specific for each parameter?
             d = {k: v for k, v in self.optim_config.items()}
             self.optim_configs[p] = d
 
@@ -228,7 +228,7 @@ class Solver(object):
         """
 
         if y_pred is None:
-            output = self.model(inputs, input_sizes)
+            output = self.model(inputs.to(self.device), input_sizes.to(self.device))
             y_pred = self.decoder.decode(output).cpu()
 
         return accuracy_score(targets, y_pred) * 100.0, y_pred
@@ -265,24 +265,19 @@ class Solver(object):
         if main_proc and self.tensorboard:
             tensorboard_logger = TensorBoardLogger(self.id, self.log_dir, self.log_params, comment=self.sufix)
 
-        train_dataset = SpectrogramDataset(audio_conf=self.audio_conf, manifest_filepath=self.train_manifest, metadata_file_path=self.metadata_path, labels=self.labels, normalize=True, speed_volume_perturb=self.speed_volume_perturb, spec_augment=self.spec_augment)
-
-        val_dataset = SpectrogramDataset(audio_conf=self.audio_conf, manifest_filepath=self.val_manifest,  metadata_file_path=self.metadata_path, labels=self.labels, normalize=True, speed_volume_perturb=False, spec_augment=False)
-
-
         if self.distributed:
-            train_sampler = DistributedBucketingSampler(train_dataset, batch_size=self.batch_size, num_replicas=world_size, rank=rank)
+            train_sampler = DistributedBucketingSampler(self.data_train, batch_size=self.batch_size, num_replicas=world_size, rank=rank)
         else:
             if self.sampler_type == 'bucketing':
-                train_sampler = BucketingSampler(train_dataset, batch_size=self.batch_size, shuffle=True)
+                train_sampler = BucketingSampler(self.data_train, batch_size=self.batch_size, shuffle=True)
             if self.sampler_type == 'random':
-                train_sampler = RandomBucketingSampler(train_dataset, batch_size=self.batch_size)
+                train_sampler = RandomBucketingSampler(self.data_train, batch_size=self.batch_size)
 
         print("Shuffling batches for the following epochs..")
         train_sampler.shuffle(self.start_epoch)
 
-        train_loader = AudioDataLoader(train_dataset, num_workers=self.num_workers, batch_sampler=train_sampler)
-        val_loader = AudioDataLoader(val_dataset, batch_size=1, num_workers=self.num_workers, shuffle=True)
+        train_loader = AudioDataLoader(self.data_train, num_workers=self.num_workers, batch_sampler=train_sampler)
+        val_loader = AudioDataLoader(self.data_val, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
 
         if self.tensorboard and self.generate_graph:  # TO DO get some audios also
             with torch.no_grad():
@@ -346,12 +341,14 @@ class Solver(object):
                 inputs = inputs.to(self.device)
                 targets = targets.to(self.device)
 
-                output, loss_value = self._step(self, inputs, input_sizes, targets)
+                output, loss_value = self._step(inputs, input_sizes, targets)
+
+                avg_loss += loss_value
 
                 y_pred = self.decoder.decode(output)
 
                 y_true_train_epoch = np.concatenate((y_true_train_epoch, targets.cpu().numpy()))  # maybe I should do it with tensors?
-                y_pred_train_epoch = np.concatenate((y_pred_train_epoch, y_pred.numpy()))
+                y_pred_train_epoch = np.concatenate((y_pred_train_epoch, y_pred.cpu().numpy()))
 
                 if self.intra_epoch_sanity_check:
 
@@ -360,11 +357,11 @@ class Solver(object):
                     losses_iters.append(loss_value)
 
                     cm = confusion_matrix(targets.cpu(), y_pred.cpu(), labels=self.labels)
-                    print('Confusion matrix train step:')
+                    print('[it %i] Confusion matrix train step:'%(i))
                     print(pd.DataFrame(cm))
 
                     if self.tensorboard:
-                        tensorboard_logger.update(len(train_loader) * epoch + i, {
+                        tensorboard_logger.update(len(train_loader) * epoch + i + 1, {
                             'Loss/through_iterations': loss_value,
                             'Accuracy/train_through_iterations': acc
                         })
@@ -384,7 +381,7 @@ class Solver(object):
                     (epoch + 1), (i + 1), len(train_sampler), batch_time=batch_time, data_time=epoch_time, loss=losses))
 
             # Loss log
-            avg_loss += loss_value
+            avg_loss /= len(train_sampler)
             self.loss_epochs.append(avg_loss)
 
             # Accuracy train log
@@ -392,20 +389,27 @@ class Solver(object):
             self.accuracy_train_epochs.append(acc_train)
 
             # Accuracy val log
+            y_pred_val = np.array([])
+            targets_val = np.array([])
             for data in val_loader:
                 inputs, targets, input_percentages, target_sizes = data
                 input_sizes = input_percentages.mul_(int(inputs.size(3))).int()
-            acc_val, y_pred_val = self.check_accuracy(targets.cpu(), inputs=inputs, input_sizes=input_sizes)
+                _, y_pred_val_batch = self.check_accuracy(targets.cpu(), inputs=inputs, input_sizes=input_sizes)
+                y_pred_val = np.concatenate((y_pred_val, y_pred_val_batch.numpy()))
+                targets_val = np.concatenate((targets_val, targets.cpu().numpy()))  # TO DO: think of a smarter way to do this later
+
+            # import pdb; pdb.set_trace()
+            acc_val, y_pred_val = self.check_accuracy(targets_val, y_pred=y_pred_val)
             self.accuracy_val_epochs.append(acc_val)
-            cm = confusion_matrix(targets.cpu(), y_pred, labels=self.labels)
+            cm = confusion_matrix(targets_val, y_pred_val, labels=self.labels)
             print('Confusion matrix validation:')
             print(pd.DataFrame(cm))
 
             # Write epoch stuff to tensorboard
             if self.tensorboard:
-                tensorboard_logger.update(epoch, {'Loss/through_epochs': avg_loss}, parameters=self.model.named_parameters)
+                tensorboard_logger.update(epoch + 1, {'Loss/through_epochs': avg_loss}, parameters=self.model.named_parameters)
 
-                tensorboard_logger.update(epoch, {
+                tensorboard_logger.update(epoch + 1, {
                     'train': acc_train,
                     'validation': acc_val
                 }, together=True, name='Accuracy/through_epochs')
@@ -415,7 +419,7 @@ class Solver(object):
             if acc_val > self.best_acc_val:
                 self.best_acc_val = acc_val
                 self.best_params = {}
-                for k, v in self.model.named_parameters.items(): # TO DO: actually copy model and save later? idk..
+                for k, v in self.model.named_parameters(): # TO DO: actually copy model and save later? idk..
                     self.best_params[k] = v.clone()
 
             # Anneal learning rate. TO DO: find better way to this this specific to every parameter as cs231n does.
