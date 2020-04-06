@@ -65,6 +65,7 @@ class Solver(object):
         - checkpoint_name: If not None, then save model checkpoints here every
           epoch.
         """
+        # import pdb; pdb.set_trace()
         self.model = model
         self.data_train = data['train']
         self.data_val = data['val']
@@ -75,6 +76,7 @@ class Solver(object):
         self.optim_config = kwargs.pop('optim_config', {})
         self.lr_decay = kwargs.pop('lr_decay', 1.0)
         self.batch_size = kwargs.pop('batch_size', 5)
+        self.batch_size_val = kwargs.pop('batch_size_val', 5)
         self.num_epochs = kwargs.pop('num_epochs', 10)
         self.num_train_samples = kwargs.pop('num_train_samples', None)  # will be removed soon.
         self.num_val_samples = kwargs.pop('num_val_samples', None)  #
@@ -98,8 +100,9 @@ class Solver(object):
 
         self.num_workers = kwargs.pop('num_workers', 16)
         self.sampler_type = kwargs.pop('sampler_type', 'random')
-        self.batch_size = kwargs.pop('batch_size', 5)
         self.start_epoch = kwargs.pop('start_epoch', 0)
+
+
 
         self.tensorboard = kwargs.pop('tensorboard', True)
         self.generate_graph = kwargs.pop('generate_graph', False)
@@ -115,7 +118,6 @@ class Solver(object):
         self.reg = kwargs.pop('reg', 1e-2)
         self.criterion_type = kwargs.pop('criterion_type', 'cross_entropy_loss')
         self.learning_anneal = kwargs.pop('learning_anneal', 1.01)
-        self.epochs = kwargs.pop('epochs', 5)
 
         self.opt_level = kwargs.pop('opt_level', 'O1')
         self.loss_scale = kwargs.pop('loss_scale', 1)
@@ -212,7 +214,10 @@ class Solver(object):
 
         - inputs:
         - inputs_sizes:
-        - targets:
+        - targets (numpy array):
+
+        Optional
+        - y_pred (numpy array):
 
         Inputs:
         - X: Array of data, of shape (N, d_1, ..., d_k)
@@ -229,7 +234,8 @@ class Solver(object):
 
         if y_pred is None:
             output = self.model(inputs.to(self.device), input_sizes.to(self.device))
-            y_pred = self.decoder.decode(output).cpu()
+            y_pred = self.decoder.decode(output.detach()).cpu().numpy()
+            del output
 
         return accuracy_score(targets, y_pred) * 100.0, y_pred
 
@@ -277,7 +283,7 @@ class Solver(object):
         train_sampler.shuffle(self.start_epoch)
 
         train_loader = AudioDataLoader(self.data_train, num_workers=self.num_workers, batch_sampler=train_sampler)
-        val_loader = AudioDataLoader(self.data_val, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)
+        val_loader = AudioDataLoader(self.data_val, batch_size=self.batch_size_val, num_workers=self.num_workers, shuffle=True)
 
         if self.tensorboard and self.generate_graph:  # TO DO get some audios also
             with torch.no_grad():
@@ -320,7 +326,8 @@ class Solver(object):
         losses = AverageMeter()
 
         start_training = time.time()
-        for epoch in range(self.start_epoch, self.epochs):
+        for epoch in range(self.start_epoch, self.num_epochs):
+            print("Start epoch..")
 
             # Put model in train mode
             self.model.train()
@@ -331,10 +338,13 @@ class Solver(object):
             start_epoch = time.time()
             for i, (data) in enumerate(train_loader, start=0):
                 start_batch = time.time()
+
+                print('Start batch..')
+
                 if i == len(train_sampler):  # QUE pq isso deus
                     break
 
-                inputs, targets, input_percentages, target_sizes = data
+                inputs, targets, input_percentages, _ = data
 
                 input_sizes = input_percentages.mul_(int(inputs.size(3))).int()
 
@@ -343,35 +353,43 @@ class Solver(object):
 
                 output, loss_value = self._step(inputs, input_sizes, targets)
 
+                print('Step finished.')
+
                 avg_loss += loss_value
 
-                y_pred = self.decoder.decode(output)
+                with torch.no_grad():
+                    y_pred = self.decoder.decode(output.detach()).cpu().numpy()
 
-                y_true_train_epoch = np.concatenate((y_true_train_epoch, targets.cpu().numpy()))  # maybe I should do it with tensors?
-                y_pred_train_epoch = np.concatenate((y_pred_train_epoch, y_pred.cpu().numpy()))
+                    # import pdb; pdb.set_trace()
+
+                    y_true_train_epoch = np.concatenate((y_true_train_epoch, targets.cpu().numpy()))  # maybe I should do it with tensors?
+                    y_pred_train_epoch = np.concatenate((y_pred_train_epoch, y_pred))
+
+                inputs_size = inputs.size(0)
+                del output, inputs, input_percentages
 
                 if self.intra_epoch_sanity_check:
+                    with torch.no_grad():
+                        acc, _ = self.check_accuracy(targets.cpu().numpy(), y_pred=y_pred)
+                        accuracies_train_iters.append(acc)
+                        losses_iters.append(loss_value)
 
-                    acc, _ = self.check_accuracy(targets.cpu(), y_pred=y_pred.cpu())
-                    accuracies_train_iters.append(acc)
-                    losses_iters.append(loss_value)
+                        cm = confusion_matrix(targets.cpu().numpy(), y_pred, labels=self.labels)
+                        print('[it %i/%i] Confusion matrix train step:'%((i + 1, len(train_sampler))))
+                        print(pd.DataFrame(cm))
 
-                    cm = confusion_matrix(targets.cpu(), y_pred.cpu(), labels=self.labels)
-                    print('[it %i] Confusion matrix train step:'%(i))
-                    print(pd.DataFrame(cm))
+                        if self.tensorboard:
+                            tensorboard_logger.update(len(train_loader) * epoch + i + 1, {
+                                'Loss/through_iterations': loss_value,
+                                'Accuracy/train_through_iterations': acc
+                            })
 
-                    if self.tensorboard:
-                        tensorboard_logger.update(len(train_loader) * epoch + i + 1, {
-                            'Loss/through_iterations': loss_value,
-                            'Accuracy/train_through_iterations': acc
-                        })
-
-                del output
+                del targets
 
                 batch_time.update(time.time() - start_batch)
 
             epoch_time.update(time.time() - start_epoch)
-            losses.update(loss_value, inputs.size(0))
+            losses.update(loss_value, inputs_size)
 
             # Write elapsed time (and loss) to terminal
             print('Epoch: [{0}][{1}/{2}]\t'
@@ -379,6 +397,8 @@ class Solver(object):
                       'Epoch {data_time.val:.3f} ({data_time.avg:.3f})\t'
                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'.format(
                     (epoch + 1), (i + 1), len(train_sampler), batch_time=batch_time, data_time=epoch_time, loss=losses))
+
+
 
             # Loss log
             avg_loss /= len(train_sampler)
@@ -389,14 +409,16 @@ class Solver(object):
             self.accuracy_train_epochs.append(acc_train)
 
             # Accuracy val log
-            y_pred_val = np.array([])
-            targets_val = np.array([])
-            for data in val_loader:
-                inputs, targets, input_percentages, target_sizes = data
-                input_sizes = input_percentages.mul_(int(inputs.size(3))).int()
-                _, y_pred_val_batch = self.check_accuracy(targets.cpu(), inputs=inputs, input_sizes=input_sizes)
-                y_pred_val = np.concatenate((y_pred_val, y_pred_val_batch.numpy()))
-                targets_val = np.concatenate((targets_val, targets.cpu().numpy()))  # TO DO: think of a smarter way to do this later
+            with torch.no_grad():
+                y_pred_val = np.array([])
+                targets_val = np.array([])
+                for data in val_loader:
+                    inputs, targets, input_percentages, _ = data
+                    input_sizes = input_percentages.mul_(int(inputs.size(3))).int()
+                    _, y_pred_val_batch = self.check_accuracy(targets.cpu().numpy(), inputs=inputs, input_sizes=input_sizes)
+                    y_pred_val = np.concatenate((y_pred_val, y_pred_val_batch))
+                    targets_val = np.concatenate((targets_val, targets.cpu().numpy()))  # TO DO: think of a smarter way to do this later
+                    del inputs, targets, input_percentages
 
             # import pdb; pdb.set_trace()
             acc_val, y_pred_val = self.check_accuracy(targets_val, y_pred=y_pred_val)
@@ -434,6 +456,7 @@ class Solver(object):
             # Rechoose batches elements
             if self.sampler_type == 'random':
                 train_sampler.recompute_bins()
+
 
         end_training = time.time()
 

@@ -24,9 +24,10 @@ hidden_size = 1024
 hidden_layers = 5
 update_rule = 'sgd'  # 'sgd', 'adam'
 criterion_type = 'cross_entropy_loss'
-batch_size = 7
+batch_size = 6
+batch_size_val = 5
 sampler = 'random'
-epochs = 30
+num_epochs = 30
 
 seed = 42
 device = torch.device('cuda')
@@ -42,12 +43,15 @@ audio_conf = dict(sample_rate=16000,
 bidirectional = True
 
 PATH_DATA = '/home/rebeca.araripe/data/FinalProject'
-metadata_path =  os.path.join(PATH_DATA, 'raw/PCGITA_metadata.xlsx')
+metadata_path = os.path.join(PATH_DATA, 'raw/PCGITA_metadata.xlsx')
+base = 'parkinson'
 data_category = 'monologues'  # vowels, read-text, monologues
 data_subcategory = ''  # AEIOU
 train_manifest = os.path.join(PATH_DATA, 'downsampled-16k/manifest_train_%s-42-%s.txt'%((data_category, data_subcategory)))
 val_manifest = os.path.join(PATH_DATA, 'downsampled-16k/manifest_val_%s-42-%s.txt'%((data_category, data_subcategory)))
 log_dir = os.path.join(PATH_DATA, 'Results/visualize/deepspeech')
+path_best_model = os.path.join(PATH_DATA, 'Results/models/deepspeech.pytorch/', '-'.join([base, data_category, data_subcategory]))  # TO DO: change this when I add the possibility of transfer or not. Keep twp separate directories.
+os.makedirs(path_best_model, exist_ok=True)
 
 # Not sure about this here
 world_size = 1  # doesn't do anything for the moment
@@ -72,7 +76,11 @@ if transfer:
 else:
     id = 'scratch'
 
-best_val = 0.0
+if os.path.exists(os.path.join(path_best_model, 'best_acc_val_cv.npy')):
+    best_acc_val = np.load(os.path.join(path_best_model, 'best_acc_val_cv.npy'))
+else:
+    best_acc_val = 0.0
+
 for it in range(num_iter_cv):
 
     lr = 10**np.random.uniform(-4, -2)
@@ -105,14 +113,17 @@ for it in range(num_iter_cv):
     solver = Solver(model, {'train': train_dataset, 'val': val_dataset}, decoder,
                     lr=lr,
                     reg=reg,
-                    epochs=epochs,
+                    num_epochs=num_epochs,
                     criterion_type=criterion_type,
                     update_rule=update_rule,
                     id=id,
                     sufix=sufix,
                     log_dir=log_dir,
                     tensorboard=tensorboard,
-                    device=device)
+                    device=device,
+                    batch_size=batch_size,
+                    sampler_type=sampler,
+                    batch_size_val=batch_size_val)
 
     solver.train()
 
@@ -124,14 +135,29 @@ for it in range(num_iter_cv):
              'val_acc_history': solver.accuracy_val_epochs
             }
 
-    if solver.best_acc_val > best_val:
-        best_val = solver.best_acc_val
+    print('================================================================= CV [%i] stats:'%(it + 1))
+    print(stats)
+    print('Best accuracy this time: ', solver.best_acc_val)
+    print('Best accuracy of all times: ', best_acc_val)
+    if solver.best_acc_val > best_acc_val:
+        best_acc_val = solver.best_acc_val
         best_stats = stats
         best_model = model
         best_solver = solver
+
+        # Save
+        print("Found better validated model, saving to %s" %(os.path.join(path_best_model, 'deepspeech_final_cv.pth')))
+        torch.save(model.state_dict(), os.path.join(path_best_model, 'deepspeech_final_cv.pth'))
+        np.save(os.path.join(path_best_model, 'best_acc_val_cv.npy'), best_acc_val)
+        f = open(os.path.join(path_best_model, 'best_info.txt'), 'w')
+        f.write('Best val accuracy:  %0.2f \n' % (best_acc_val))
+        f.write('Visualization  logdir: ' + log_dir)
+        f.write('Visualization id: ' + id)
+        f.write('Visualization sufix: ' + sufix)
+        f.close()
 
     # Print results
     print('lr %e reg %e  val accuracy: %f' % (lr, reg, val_accuracy))
 
 
-print('best validation accuracy achieved: %f' % best_val)
+print('best validation accuracy achieved: %f' % best_acc_val)
